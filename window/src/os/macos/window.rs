@@ -1271,9 +1271,17 @@ impl WindowInner {
     fn debug_set_live_resizing(&mut self, live: bool) {
         unsafe {
             if live {
-                WindowView::will_start_live_resize(&mut **self.view, sel!(windowWillStartLiveResize:), nil);
+                WindowView::will_start_live_resize(
+                    &mut **self.view,
+                    sel!(windowWillStartLiveResize:),
+                    nil,
+                );
             } else {
-                WindowView::did_end_live_resize(&mut **self.view, sel!(windowDidEndLiveResize:), nil);
+                WindowView::did_end_live_resize(
+                    &mut **self.view,
+                    sel!(windowDidEndLiveResize:),
+                    nil,
+                );
                 let () = msg_send![*self.view, setNeedsDisplay: YES];
             }
         }
@@ -3600,10 +3608,7 @@ mod debug_resize {
         unsafe { CACurrentMediaTime() }
     }
 
-    async fn on_window(
-        window_id: usize,
-        f: impl FnOnce(&mut WindowInner) + Send + 'static,
-    ) {
+    async fn on_window(window_id: usize, f: impl FnOnce(&mut WindowInner) + Send + 'static) {
         let _ = Connection::with_window_inner(window_id, move |inner| {
             f(inner);
             Ok(())
