@@ -1,6 +1,4 @@
-mod dbus;
 mod macos;
-mod windows;
 
 #[derive(Debug, Clone)]
 pub struct ToastNotification {
@@ -16,21 +14,7 @@ impl ToastNotification {
     }
 }
 
-#[cfg(windows)]
-use crate::windows as backend;
-#[cfg(all(not(target_os = "macos"), not(windows)))]
-use dbus as backend;
-#[cfg(target_os = "macos")]
 use macos as backend;
-
-mod nop {
-    use super::*;
-
-    #[allow(dead_code)]
-    pub fn show_notif(_: ToastNotification) -> Result<(), Box<dyn std::error::Error>> {
-        Ok(())
-    }
-}
 
 pub fn show(notif: ToastNotification) {
     if let Err(err) = backend::show_notif(notif) {
