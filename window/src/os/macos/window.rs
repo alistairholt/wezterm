@@ -3010,11 +3010,17 @@ impl WindowView {
         }
     }
 
-    extern "C" fn did_end_live_resize(this: &mut Object, _sel: Sel, _notification: id) {
-        if let Some(this) = Self::get_this(this) {
-            let mut inner = this.inner.borrow_mut();
+    extern "C" fn did_end_live_resize(this: &mut Object, _sel: Sel, notification: id) {
+        if let Some(view) = Self::get_this(this) {
+            let mut inner = view.inner.borrow_mut();
             inner.live_resizing = false;
+        } else {
+            return;
         }
+        // Tell the app the live resize is over (Resized with
+        // live_resizing = false), so it stops presenting every frame in
+        // step with the window.
+        Self::did_resize(this, sel!(windowDidResize:), notification);
     }
 
     extern "C" fn did_resize(this: &mut Object, _sel: Sel, _notification: id) {
@@ -3025,6 +3031,8 @@ impl WindowView {
                 gl_context_pair.backend.update();
             }
         }
+
+        Self::sync_backing_layer_scale(this);
 
         let frame = unsafe { NSView::frame(this as *mut _) };
         let backing_frame = unsafe { NSView::convertRectToBacking(this as *mut _, frame) };
@@ -3127,16 +3135,75 @@ impl WindowView {
     ) {
     }
 
+    /// Whether this view presents through wezterm-gui's MetalPresenter
+    /// (front_end = "WebGpu"). The OpenGL paths keep their old layer setup.
+    fn presents_with_metal(view: &Object) -> bool {
+        let front_end = Self::get_this(view)
+            .and_then(|this| {
+                this.inner
+                    .try_borrow()
+                    .ok()
+                    .map(|inner| inner.config.front_end)
+            })
+            .unwrap_or_else(|| config::configuration().front_end);
+        front_end == config::FrontEndSelection::WebGpu
+    }
+
+    /// The scale the backing layer's contents should use. The Metal
+    /// presenter draws drawables of backing-pixel size with a non-scaling
+    /// gravity, so the layer must use the window's backing scale or a 2x
+    /// drawable would show at twice its size. The OpenGL paths rely on 1.0
+    /// with the default stretching gravity.
+    fn backing_layer_scale(view: &Object, window_scale: Option<CGFloat>) -> CGFloat {
+        if !Self::presents_with_metal(view) {
+            return 1.0;
+        }
+        window_scale.unwrap_or_else(|| unsafe {
+            let window: id = msg_send![view, window];
+            if window.is_null() {
+                let screen = NSScreen::mainScreen(nil);
+                if screen.is_null() {
+                    1.0
+                } else {
+                    NSScreen::backingScaleFactor(screen)
+                }
+            } else {
+                NSWindow::backingScaleFactor(window)
+            }
+        })
+    }
+
+    /// Keep the backing layer's contentsScale in step with the window,
+    /// for example after a move to a screen with a different scale.
+    fn sync_backing_layer_scale(view: &Object) {
+        if !Self::presents_with_metal(view) {
+            return;
+        }
+        unsafe {
+            let layer: id = msg_send![view, layer];
+            if layer.is_null() {
+                return;
+            }
+            let scale = Self::backing_layer_scale(view, None);
+            let current: CGFloat = msg_send![layer, contentsScale];
+            if current != scale {
+                log::trace!("backing layer contentsScale {current} -> {scale}");
+                let () = msg_send![layer, setContentsScale: scale];
+            }
+        }
+    }
+
     extern "C" fn layer_should_inherit_contents_scale_from_window(
-        _: &Object,
+        view: &Object,
         _: Sel,
         layer: *mut Object,
-        _: CGFloat,
+        new_scale: CGFloat,
         _: *mut Object,
     ) -> BOOL {
-        log::trace!("layer_should_inherit_contents_scale_from_window");
+        log::trace!("layer_should_inherit_contents_scale_from_window {new_scale}");
+        let scale = Self::backing_layer_scale(view, Some(new_scale));
         unsafe {
-            let () = msg_send![layer, setContentsScale: 1.0];
+            let () = msg_send![layer, setContentsScale: scale];
         }
         YES
     }
@@ -3148,8 +3215,9 @@ impl WindowView {
             // Use type method to get a instance of CAMetalLayer.
             // So that we don't have to worry about retaining/releasing it.
             let layer: id = msg_send![class, layer];
+            let scale = Self::backing_layer_scale(view, None);
             let () = msg_send![layer, setDelegate: view];
-            let () = msg_send![layer, setContentsScale: 1.0];
+            let () = msg_send![layer, setContentsScale: scale];
             let () = msg_send![layer, setOpaque: NO];
             layer
         }
