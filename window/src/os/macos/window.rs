@@ -3171,7 +3171,16 @@ impl WindowView {
                 return;
             }
 
-            if inner.paint_throttled {
+            if inner.live_resizing {
+                // During a live resize AppKit calls us once per size step
+                // (NSViewLayerContentsRedrawDuringViewResize) and then shows
+                // whatever our GL surface holds, scaled to the new bounds.
+                // If we skip this step because of max_fps throttling, the
+                // user sees the previous frame stretched or squeezed, so
+                // paint now regardless of the throttle.
+                inner.events.dispatch(WindowEvent::NeedRepaint);
+                inner.invalidated = false;
+            } else if inner.paint_throttled {
                 inner.invalidated = true;
             } else {
                 inner.events.dispatch(WindowEvent::NeedRepaint);
