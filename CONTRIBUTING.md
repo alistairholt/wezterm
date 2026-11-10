@@ -30,7 +30,7 @@ Look at [mkdocs serve](https://www.mkdocs.org/user-guide/cli/#mkdocs-serve) for 
 There are a lot of targets out there.  Today we have docs that are Ubuntu biased
 and I know that there are a lot of flavors of Linux. Rather than expand the README
 with instructions for those, please translate the instructions into steps that
-can be run in the [`get-deps`](https://github.com/wezterm/wezterm/blob/master/get-deps)
+can be run in the [`get-deps`](https://github.com/wezterm/wezterm/blob/main/get-deps)
 script.
 
 ## Contributing code
@@ -50,14 +50,25 @@ Some platforms like Windows have a few specific steps, make sure to check the de
 
 The `term` directory holds the core terminal model code. This is agnostic
 of any windowing system. If you want to add support for terminal escape
-sequences and that sort of thing, you probably want to be in the `term` directory.
+sequences and that sort of thing, you probably want to be in the `term` directory,
+with the parsing side of things in `wezterm-escape-parser`.
 Keep in mind that for maximal compatibility and utility `wezterm` aims to
 be compatible with the `xterm` behavior.
 https://invisible-island.net/xterm/ctlseqs/ctlseqs.html is a useful resource!
 
-The `src` directory holds the code for the `wezterm` program. This is
+The `wezterm-gui` directory holds the code for the `wezterm-gui` program. This is
 the GUI renderer for the terminal model.  If you want to change something
-about the GUI you want to be in the `src` dir.
+about the GUI you want to be in the `wezterm-gui` dir. The platform-specific
+windowing code lives in the `window` directory.
+
+The `wezterm` directory holds the `wezterm` command line program
+(`wezterm cli`, `wezterm imgcat` and so on). GUI subcommands such as
+`wezterm start` are handed off to `wezterm-gui`.
+
+The `mux` directory holds the model of windows, tabs and panes, and the
+domains that spawn them. The `config` directory holds the configuration
+types, and the `lua-api-crates` directory holds the Lua functions exposed
+to config files.
 
 ### Iterating
 
@@ -73,17 +84,17 @@ Likewise, if you want to quickly check that something works, you can run it
 in debug mode using:
 
 ```console
-$ cargo run
+$ cargo run --bin wezterm-gui
 ```
 
 This will produce a debug-instrumented binary with poor optimization. This will
-give you more detail in the backtrace produced if you run `RUST_BACKTRACE=1 cargo run`.
+give you more detail in the backtrace produced if you run `RUST_BACKTRACE=1 cargo run --bin wezterm-gui`.
 
 If you get a panic and want to examine local variables, you'll need to use gdb:
 
 ```console
 $ cargo build
-$ gdb ./target/debug/wezterm
+$ gdb ./target/debug/wezterm-gui
 $ break rust_panic               # hit tab to complete the name of the panic symbol!
 $ run
 $ bt
@@ -102,12 +113,18 @@ This will help ensure that your contributions keep working as things change.
 You can run the existing tests using:
 
 ```console
-$ cargo test --all
+$ make test
 ```
 
+This runs `cargo nextest run` for the workspace, and then runs the
+`wezterm-escape-parser` tests on their own, because that crate is `no_std`
+by default. You can run a single test with
+`cargo nextest run -p term <test_name>`.
+
 There are some helper classes for writing tests for terminal behavior.
-Here's [an example of a test to verify that the terminal contents
-match expectations](https://github.com/wezterm/wezterm/blob/fd532a8c2fb3b56593597cf8be1775da1feda0a3/term/src/test/mod.rs#L314).
+See `TestTerm` and `assert_visible_contents` in
+[`term/src/test/mod.rs`](term/src/test/mod.rs) for how to check that the
+terminal contents match expectations.
 
 Please also make a point of adding comments to your tests to help
 clarify the intent of the test!
@@ -177,8 +194,14 @@ Make sure that the tests are working and that the code is correctly
 formatted otherwise the continuous integration system will fail your build:
 
 ```console
-$ rustup component add rustfmt-preview          # you only need to do this once
-$ cargo test --all
-$ cargo fmt --all
+$ rustup toolchain install nightly --component rustfmt   # you only need to do this once
+$ make test
+$ make fmt
 ```
+
+CI checks formatting with nightly rustfmt (`cargo +nightly fmt --all -- --check`),
+so use `make fmt` (which runs `cargo +nightly fmt`) rather than plain `cargo fmt`.
+
+If you add or change user-visible behavior, add a note to the
+"Continuous/Nightly" section at the top of `docs/changelog.md`.
 
