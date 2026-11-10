@@ -18,12 +18,35 @@ impl crate::TermWindow {
     }
 
     fn call_draw_webgpu(&mut self) -> anyhow::Result<()> {
+        use crate::termwindow::metal_present::drawable_size_for;
         use crate::termwindow::webgpu::WebGpuTexture;
+        use ::window::WindowOps;
 
         let webgpu = self.webgpu.as_mut().unwrap();
         let render_state = self.render_state.as_ref().unwrap();
 
-        let output = webgpu.surface.get_current_texture()?;
+        // Size the drawable from the dimensions we laid out and project
+        // for (not from the view bounds), so a frame is never scaled: if
+        // they lag the view, the layer's top-left gravity shows it at 1:1.
+        let Some(size) = drawable_size_for(
+            self.dimensions.pixel_width,
+            self.dimensions.pixel_height,
+            webgpu.device.limits().max_texture_dimension_2d,
+        ) else {
+            log::trace!("metal_present: no drawable for {:?}", self.dimensions);
+            return Ok(());
+        };
+        let Some(output) = webgpu
+            .presenter
+            .begin_frame(&webgpu.device, size, self.live_resizing)
+        else {
+            // No drawable in time; try again on a later pass. The layer
+            // keeps showing the previous frame, unscaled.
+            if let Some(window) = self.window.as_ref() {
+                window.invalidate();
+            }
+            return Ok(());
+        };
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -142,9 +165,29 @@ impl crate::TermWindow {
             }
         }
 
+        if !cleared {
+            // Nothing to draw: still clear, as the drawable's contents
+            // are undefined (wgpu treats a texture from hal as initialized).
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Clear Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+        }
+
         // submit will accept anything that implements IntoIter
         webgpu.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
+        drop(view);
+        webgpu.presenter.present(&webgpu.queue, output);
 
         Ok(())
     }

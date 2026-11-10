@@ -1,3 +1,4 @@
+#![allow(unexpected_cfgs)] // <https://github.com/SSheldon/rust-objc/issues/125>
 //! Presents WebGpu frames into the view's CAMetalLayer without a
 //! `wgpu::Surface`.
 //!
@@ -86,6 +87,8 @@ unsafe fn layer_gravity(layer: *mut Object) -> String {
 /// so which name is the visual top depends on whether the layer's geometry
 /// ends up flipped. AppKit flips backing layers of flipped views.
 unsafe fn pin_contents_top_left(layer: *mut Object) {
+    let before = layer_gravity(layer);
+    let geometry_flipped: BOOL = msg_send![layer, isGeometryFlipped];
     let flipped: BOOL = msg_send![layer, contentsAreFlipped];
     let gravity = if flipped == YES {
         kCAGravityBottomLeft
@@ -93,9 +96,12 @@ unsafe fn pin_contents_top_left(layer: *mut Object) {
         kCAGravityTopLeft
     };
     let () = msg_send![layer, setContentsGravity: gravity];
-    log::debug!(
-        "metal_present: contentsAreFlipped={} gravity={}",
+    // Logged so an on-screen check can tell which way this went.
+    log::info!(
+        "metal_present: geometryFlipped={} contentsAreFlipped={} gravity {} -> {}",
+        geometry_flipped == YES,
         flipped == YES,
+        before,
         layer_gravity(layer)
     );
 }
@@ -104,6 +110,10 @@ pub struct MetalPresenter {
     layer: metal::MetalLayer,
     format: wgpu::TextureFormat,
     usage: wgpu::TextureUsages,
+    /// Size of the last drawable we got. Compared with this rather than
+    /// the layer's drawableSize, which Core Animation may update on its
+    /// own when the bounds or scale change.
+    last_size: Cell<Option<(u32, u32)>>,
     #[cfg(test)]
     pub(crate) fail_next_drawable: Cell<bool>,
 }
@@ -185,6 +195,7 @@ impl MetalPresenter {
             layer,
             format,
             usage,
+            last_size: Cell::new(None),
             #[cfg(test)]
             fail_next_drawable: Cell::new(false),
         })
@@ -212,11 +223,11 @@ impl MetalPresenter {
         live_resizing: bool,
     ) -> Option<PresentFrame> {
         let started = Instant::now();
-        let current = self.layer.drawable_size();
-        let size_changed = (current.width, current.height) != (size.0 as f64, size.1 as f64);
+        let size_changed = self.last_size.get() != Some(size);
         let mode = choose_present_mode(live_resizing, size_changed);
 
-        if size_changed {
+        let current = self.layer.drawable_size();
+        if (current.width, current.height) != (size.0 as f64, size.1 as f64) {
             self.layer
                 .set_drawable_size(CGSize::new(size.0 as f64, size.1 as f64));
         }
@@ -281,6 +292,7 @@ impl MetalPresenter {
             )
         };
 
+        self.last_size.set(Some(size));
         Some(PresentFrame {
             texture,
             size: tex_size,

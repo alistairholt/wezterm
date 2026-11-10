@@ -35,6 +35,7 @@ impl super::TermWindow {
             dimensions,
             window_state,
         );
+        self.live_resizing = live_resizing;
         if dimensions.pixel_width == 0 || dimensions.pixel_height == 0 {
             // on windows, this can happen when minimizing the window.
             // NOP!
@@ -51,10 +52,6 @@ impl super::TermWindow {
         self.quad_generation += 1;
         if last_state != self.window_state {
             self.load_os_parameters();
-        }
-
-        if let Some(webgpu) = self.webgpu.as_mut() {
-            webgpu.resize(dimensions);
         }
 
         // For simple, user-interactive resizes where the dpi doesn't change,

@@ -1,7 +1,7 @@
 use crate::quad::Vertex;
+use crate::termwindow::metal_present::MetalPresenter;
 use anyhow::anyhow;
 use config::{ConfigHandle, GpuInfo, WebGpuPowerPreference};
-use std::cell::RefCell;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use window::bitmaps::Texture2d;
@@ -9,7 +9,7 @@ use window::raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WindowHandle,
 };
-use window::{BitmapImage, Dimensions, Rect, Window};
+use window::{BitmapImage, Rect, Window};
 
 #[repr(C)]
 #[derive(Copy, Clone, Default, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -24,11 +24,10 @@ pub struct ShaderUniform {
 pub struct WebGpuState {
     pub adapter_info: wgpu::AdapterInfo,
     pub downlevel_caps: wgpu::DownlevelCapabilities,
-    pub surface: wgpu::Surface<'static>,
     pub device: wgpu::Device,
     pub queue: Arc<wgpu::Queue>,
-    pub config: RefCell<wgpu::SurfaceConfiguration>,
-    pub dimensions: RefCell<Dimensions>,
+    /// Presents into the view's CAMetalLayer; replaces wgpu::Surface.
+    pub presenter: MetalPresenter,
     pub render_pipeline: wgpu::RenderPipeline,
     shader_uniform_bind_group_layout: wgpu::BindGroupLayout,
     pub texture_bind_group_layout: wgpu::BindGroupLayout,
@@ -188,60 +187,51 @@ pub fn adapter_info_to_gpu_info(info: wgpu::AdapterInfo) -> GpuInfo {
     }
 }
 
-fn compute_compatibility_list(
-    instance: &wgpu::Instance,
-    backends: wgpu::Backends,
-    surface: &wgpu::Surface,
-) -> Vec<String> {
+fn compute_adapter_list(instance: &wgpu::Instance, backends: wgpu::Backends) -> Vec<String> {
     instance
         .enumerate_adapters(backends)
         .into_iter()
-        .map(|a| {
-            let info = adapter_info_to_gpu_info(a.get_info());
-            let compatible = a.is_surface_supported(&surface);
-            format!(
-                "{}, compatible={}",
-                info.to_string(),
-                if compatible { "yes" } else { "NO" }
-            )
-        })
+        .map(|a| adapter_info_to_gpu_info(a.get_info()).to_string())
         .collect()
 }
 
+/// The CAMetalLayer backing the window's view. The window crate makes it
+/// (make_backing_layer) and keeps its contentsScale in step with the
+/// window's backing scale.
+#[allow(unexpected_cfgs)] // <https://github.com/SSheldon/rust-objc/issues/125>
+fn view_layer(handle: &RawHandlePair) -> anyhow::Result<*mut objc::runtime::Object> {
+    use objc::{msg_send, sel, sel_impl};
+    match handle.window {
+        RawWindowHandle::AppKit(h) => {
+            let view = h.ns_view.as_ptr() as *mut objc::runtime::Object;
+            let layer: *mut objc::runtime::Object = unsafe { msg_send![view, layer] };
+            anyhow::ensure!(!layer.is_null(), "view has no backing layer");
+            Ok(layer)
+        }
+        other => anyhow::bail!("unsupported window handle {other:?}"),
+    }
+}
+
 impl WebGpuState {
-    pub async fn new(
-        window: &Window,
-        dimensions: Dimensions,
-        config: &ConfigHandle,
-    ) -> anyhow::Result<Self> {
+    pub async fn new(window: &Window, config: &ConfigHandle) -> anyhow::Result<Self> {
         let handle = RawHandlePair::new(window);
-        Self::new_impl(handle, dimensions, config).await
+        Self::new_impl(handle, config).await
     }
 
-    pub async fn new_impl(
-        handle: RawHandlePair,
-        dimensions: Dimensions,
-        config: &ConfigHandle,
-    ) -> anyhow::Result<Self> {
-        let backends = wgpu::Backends::all();
+    pub async fn new_impl(handle: RawHandlePair, config: &ConfigHandle) -> anyhow::Result<Self> {
+        // We present through our own CAMetalLayer (MetalPresenter), so only
+        // Metal adapters can work.
+        let backends = wgpu::Backends::METAL;
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends,
             ..Default::default()
         });
-        let surface = unsafe {
-            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(&handle)?)?
-        };
+        let layer = view_layer(&handle)?;
 
         let mut adapter: Option<wgpu::Adapter> = None;
 
         if let Some(preference) = &config.webgpu_preferred_adapter {
             for a in instance.enumerate_adapters(backends) {
-                if !a.is_surface_supported(&surface) {
-                    let info = adapter_info_to_gpu_info(a.get_info());
-                    log::warn!("{} is not compatible with surface", info.to_string());
-                    continue;
-                }
-
                 let info = a.get_info();
 
                 if preference.name != info.name {
@@ -277,7 +267,7 @@ impl WebGpuState {
             }
 
             if adapter.is_none() {
-                let adapters = compute_compatibility_list(&instance, backends, &surface);
+                let adapters = compute_adapter_list(&instance, backends);
                 log::warn!(
                     "Your webgpu preferred adapter '{}' was either not \
                      found or is not compatible with your display. Available:\n{}",
@@ -297,7 +287,7 @@ impl WebGpuState {
                             }
                             WebGpuPowerPreference::LowPower => wgpu::PowerPreference::LowPower,
                         },
-                        compatible_surface: Some(&surface),
+                        compatible_surface: None,
                         force_fallback_adapter: config.webgpu_force_fallback_adapter,
                     })
                     .await?,
@@ -305,7 +295,7 @@ impl WebGpuState {
         }
 
         let adapter = adapter.ok_or_else(|| {
-            let adapters = compute_compatibility_list(&instance, backends, &surface);
+            let adapters = compute_adapter_list(&instance, backends);
             anyhow!(
                 "no compatible adapter found. Available:\n{}",
                 adapters.join("\n")
@@ -314,8 +304,6 @@ impl WebGpuState {
 
         let adapter_info = adapter.get_info();
         log::trace!("Using adapter: {adapter_info:?}");
-        let caps = surface.get_capabilities(&adapter);
-        log::trace!("caps: {caps:?}");
         let downlevel_caps = adapter.get_downlevel_capabilities();
         log::trace!("downlevel_caps: {downlevel_caps:?}");
 
@@ -338,50 +326,10 @@ impl WebGpuState {
 
         let queue = Arc::new(queue);
 
-        // Explicitly request an SRGB format, if available
-        let pref_format_srgb = caps.formats[0].add_srgb_suffix();
-        let format = if caps.formats.contains(&pref_format_srgb) {
-            pref_format_srgb
-        } else {
-            caps.formats[0]
-        };
-
-        // Need to check that this is supported, as trying to set
-        // view_formats without it will cause surface.configure
-        // to panic
-        // <https://github.com/wezterm/wezterm/issues/3565>
-        let view_formats = if downlevel_caps
-            .flags
-            .contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS)
-        {
-            vec![format.add_srgb_suffix(), format.remove_srgb_suffix()]
-        } else {
-            vec![]
-        };
-
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: dimensions.pixel_width as u32,
-            height: dimensions.pixel_height as u32,
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: if caps
-                .alpha_modes
-                .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
-            {
-                wgpu::CompositeAlphaMode::PostMultiplied
-            } else if caps
-                .alpha_modes
-                .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
-            {
-                wgpu::CompositeAlphaMode::PreMultiplied
-            } else {
-                wgpu::CompositeAlphaMode::Auto
-            },
-            view_formats,
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &config);
+        // The sRGB format the surface used to pick on macOS; the layer's
+        // pixel format matches it, so blending and colors are unchanged.
+        let format = wgpu::TextureFormat::Bgra8UnormSrgb;
+        let presenter = unsafe { MetalPresenter::new(layer, &device, format)? };
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("../shader.wgsl"));
 
@@ -466,7 +414,7 @@ impl WebGpuState {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
+                    format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -495,11 +443,9 @@ impl WebGpuState {
         Ok(Self {
             adapter_info,
             downlevel_caps,
-            surface,
             device,
             queue,
-            config: RefCell::new(config),
-            dimensions: RefCell::new(dimensions),
+            presenter,
             render_pipeline,
             handle,
             shader_uniform_bind_group_layout,
@@ -525,21 +471,5 @@ impl WebGpuState {
             }],
             label: Some("ShaderUniform Bind Group"),
         })
-    }
-
-    pub fn resize(&self, dims: Dimensions) {
-        if dims == *self.dimensions.borrow() {
-            return;
-        }
-        *self.dimensions.borrow_mut() = dims;
-        let mut config = self.config.borrow_mut();
-        config.width = dims.pixel_width as u32;
-        config.height = dims.pixel_height as u32;
-        if config.width > 0 && config.height > 0 {
-            // Avoid reconfiguring with a 0 sized surface, as webgpu will
-            // panic in that case
-            // <https://github.com/wezterm/wezterm/issues/2881>
-            self.surface.configure(&self.device, &config);
-        }
     }
 }
