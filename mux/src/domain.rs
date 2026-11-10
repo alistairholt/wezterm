@@ -258,15 +258,6 @@ impl LocalDomain {
         false
     }
 
-    #[cfg(windows)]
-    fn is_conpty(&self) -> bool {
-        let pty_system = self.pty_system.lock();
-        let pty_system: &dyn PtySystem = &**pty_system;
-        pty_system
-            .downcast_ref::<portable_pty::win::conpty::ConPtySystem>()
-            .is_some()
-    }
-
     async fn fixup_command(&self, cmd: &mut CommandBuilder) -> anyhow::Result<()> {
         if let Some(wsl) = self.resolve_wsl_domain() {
             let mut args: Vec<OsString> = cmd.get_argv().clone();
@@ -567,11 +558,6 @@ impl portable_pty::Child for FailedProcessSpawn {
     }
 
     fn process_id(&self) -> Option<u32> {
-        None
-    }
-
-    #[cfg(windows)]
-    fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
         None
     }
 }

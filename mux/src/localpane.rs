@@ -523,11 +523,6 @@ impl Pane for LocalPane {
             let name = self.pty.lock().tty_name()?;
             Some(name.to_string_lossy().into_owned())
         }
-
-        #[cfg(windows)]
-        {
-            None
-        }
     }
 
     fn get_foreground_process_info(&self, policy: CachePolicy) -> Option<LocalProcessInfo> {
@@ -547,11 +542,6 @@ impl Pane for LocalPane {
                 return Some(path.to_string_lossy().to_string());
             }
             return None;
-        }
-
-        #[cfg(windows)]
-        if let Some(fg) = self.divine_foreground_process(policy) {
-            return Some(fg.executable.to_string_lossy().to_string());
         }
 
         #[allow(unreachable_code)]
@@ -1076,11 +1066,6 @@ impl LocalPane {
             return None;
         }
 
-        #[cfg(windows)]
-        if let Some(fg) = self.divine_foreground_process(policy) {
-            return Url::from_directory_path(fg.cwd).ok();
-        }
-
         #[allow(unreachable_code)]
         None
     }
@@ -1117,10 +1102,6 @@ impl LocalPane {
                     }
 
                     for child in proc.children.values() {
-                        #[cfg(windows)]
-                        if child.console == 0 {
-                            continue;
-                        }
                         find_youngest(child, youngest);
                     }
                 }
