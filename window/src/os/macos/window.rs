@@ -3642,6 +3642,10 @@ impl WindowView {
 /// step calls setFrame:display:YES. Each step is logged at info level
 /// with the host time in seconds (the clock used by CACurrentMediaTime and
 /// by motionrec's frames.csv), so recordings can be lined up with steps.
+///
+/// With `WEZTERM_DEBUG_RESIZE_NOT_LIVE=1` the steps run outside a live
+/// resize, so the max_fps throttle applies and skips steps. That shows
+/// what an undrawn step looks like (the layer's contents gravity).
 mod debug_resize {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -3715,7 +3719,11 @@ mod debug_resize {
         promise::spawn::spawn(async move {
             async_io::Timer::after(delay).await;
             log::info!("debug-resize begin host_time={:.6}", host_time());
-            on_window(window_id, |w| w.debug_set_live_resizing(true)).await;
+            let live = std::env::var_os("WEZTERM_DEBUG_RESIZE_NOT_LIVE").is_none();
+            log::info!("debug-resize live={live}");
+            if live {
+                on_window(window_id, |w| w.debug_set_live_resizing(true)).await;
+            }
             for (n, seg) in segments.iter().enumerate() {
                 for step in 0..seg.steps {
                     let (dw, dh) = (seg.dw, seg.dh);
@@ -3728,7 +3736,9 @@ mod debug_resize {
                 }
                 async_io::Timer::after(seg.hold).await;
             }
-            on_window(window_id, |w| w.debug_set_live_resizing(false)).await;
+            if live {
+                on_window(window_id, |w| w.debug_set_live_resizing(false)).await;
+            }
             log::info!("debug-resize end host_time={:.6}", host_time());
         })
         .detach();
