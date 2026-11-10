@@ -345,7 +345,7 @@ class Target(object):
         self.env["CARGO_INCREMENTAL"] = "0"
         self.env["SCCACHE_GHA_ENABLED"] = "true"
         self.env["RUSTC_WRAPPER"] = "sccache"
-        self.env["MACOSX_DEPLOYMENT_TARGET"] = "10.12"
+        self.env["MACOSX_DEPLOYMENT_TARGET"] = "14.0"
 
     def prep_environment(self):
         steps = self.checkout()
