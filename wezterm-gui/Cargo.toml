@@ -28,10 +28,6 @@ dhat-ad-hoc = ["dhat"]  # if you are doing ad hoc profiling
 [build-dependencies]
 anyhow.workspace = true
 
-[target.'cfg(windows)'.build-dependencies]
-cc.workspace = true
-embed-resource.workspace = true
-
 [dependencies]
 anyhow.workspace = true
 bitflags.workspace = true
@@ -105,21 +101,6 @@ wezterm-toast-notification.workspace = true
 wgpu.workspace = true
 window-funcs.workspace = true
 window.workspace = true
-
-[target.'cfg(windows)'.dependencies]
-shared_library.workspace = true
-winapi = { workspace=true, features = [
-    "winuser",
-    "consoleapi",
-    "handleapi",
-    "fileapi",
-    "namedpipeapi",
-    "synchapi",
-    "winsock2",
-]}
-windows = { workspace=true, features = [
-    "Win32_UI_Shell",
-]}
 
 [dev-dependencies]
 benchmarking.workspace = true
