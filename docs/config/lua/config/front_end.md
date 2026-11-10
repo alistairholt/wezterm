@@ -35,6 +35,13 @@ a number of platform-specific backends:
 * Vulkan
 * DirectX 12 (on Windows)
 
+On this macOS-only fork, WebGpu always uses Metal, and wezterm presents
+each frame into the window's Core Animation layer itself. During a live
+window resize every step is drawn at the new size and shown together with
+the new window frame, so text is not stretched while you drag. If a step
+can't be drawn in time, the previous frame stays at its normal size,
+pinned to the top-left corner.
+
 See also:
 
 * [webgpu_preferred_adapter](webgpu_preferred_adapter.md)

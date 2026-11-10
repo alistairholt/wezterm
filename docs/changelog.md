@@ -22,6 +22,9 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* macOS: with `front_end = "WebGpu"`, wezterm presents Metal frames into its
+  own layer, in step with live window resizes, so the window no longer
+  stretches or squeezes its content while you drag an edge or corner.
 * This fork is now macOS-only. Windows, X11 and Wayland support, WSL
   domains, the fontconfig and GDI font locators, and the Linux and Windows
   packages and CI builds have been removed.
