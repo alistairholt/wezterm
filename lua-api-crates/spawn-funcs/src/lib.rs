@@ -35,13 +35,6 @@ async fn run_child_process<'lua>(
         cmd.args(&args[1..]);
     }
 
-    #[cfg(windows)]
-    {
-        use smol::process::windows::CommandExt;
-        use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-
     let output = cmd.output().await.map_err(mlua::Error::external)?;
 
     Ok((
@@ -56,13 +49,6 @@ async fn background_child_process<'lua>(_: &'lua Lua, args: Vec<String>) -> mlua
 
     if args.len() > 1 {
         cmd.args(&args[1..]);
-    }
-
-    #[cfg(windows)]
-    {
-        use smol::process::windows::CommandExt;
-        use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
-        cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
     cmd.stdin(smol::process::Stdio::null())

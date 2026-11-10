@@ -365,9 +365,6 @@ impl CommandDef {
         result
     }
 
-    #[cfg(not(target_os = "macos"))]
-    pub fn recreate_menubar(_config: &ConfigHandle) {}
-
     /// Update the menubar to reflect the current config state.
     /// We cannot simply build a completely new one and replace it at runtime,
     /// because something in cocoa get's unhappy and crashes shortly after.
@@ -376,7 +373,6 @@ impl CommandDef {
     /// We use the macos menu item tag to do a mark-sweep style garbage
     /// collection to figure out which items were not reused/updated
     /// and remove them at the end.
-    #[cfg(target_os = "macos")]
     pub fn recreate_menubar(config: &ConfigHandle) {
         use window::os::macos::menu::*;
 
@@ -2021,9 +2017,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
     return vec![
         // ----------------- WezTerm
         ReloadConfiguration,
-        #[cfg(target_os = "macos")]
         HideApplication,
-        #[cfg(target_os = "macos")]
         QuitApplication,
         // ----------------- Shell
         SpawnTab(SpawnTabDomain::CurrentPaneDomain),
@@ -2041,10 +2035,6 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         DetachDomain(SpawnTabDomain::CurrentPaneDomain),
         ResetTerminal,
         // ----------------- Edit
-        #[cfg(not(target_os = "macos"))]
-        PasteFrom(ClipboardPasteSource::PrimarySelection),
-        #[cfg(not(target_os = "macos"))]
-        CopyTo(ClipboardCopyDestination::PrimarySelection),
         CopyTo(ClipboardCopyDestination::Clipboard),
         PasteFrom(ClipboardPasteSource::Clipboard),
         ClearScrollback(ScrollbackEraseMode::ScrollbackOnly),

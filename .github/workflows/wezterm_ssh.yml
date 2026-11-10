@@ -24,7 +24,7 @@ on:
 
 jobs:
   build-wezterm-ssh-feature-libssh-rs:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -46,7 +46,7 @@ jobs:
           cargo build -p wezterm-ssh --no-default-features --features "libssh-rs vendored-openssl-libssh-rs"
           cargo nextest run --no-fail-fast -p wezterm-ssh --no-default-features --features "libssh-rs vendored-openssl-libssh-rs"
   build-wezterm-ssh-feature-ssh2:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v3

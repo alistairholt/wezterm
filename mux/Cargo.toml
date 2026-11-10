@@ -49,9 +49,5 @@ wezterm-dynamic.workspace = true
 wezterm-ssh.workspace = true
 wezterm-term = { workspace=true, features=["use_serde"] }
 
-[target."cfg(windows)".dependencies]
-ntapi.workspace = true
-windows-sys = { workspace = true, features = ["Win32_Networking_WinSock"] }
-
 [dev-dependencies]
 k9.workspace = true

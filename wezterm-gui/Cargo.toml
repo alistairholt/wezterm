@@ -10,8 +10,7 @@ publish = false
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["vendored-fonts", "wayland"]
-wayland = ["window/wayland"]
+default = ["vendored-fonts"]
 distro-defaults = ["config/distro-defaults"]
 vendor-nerd-font-symbols-font = ["wezterm-font/vendor-nerd-font-symbols"]
 vendor-jetbrains-font = ["wezterm-font/vendor-jetbrains"]
@@ -28,10 +27,6 @@ dhat-ad-hoc = ["dhat"]  # if you are doing ad hoc profiling
 
 [build-dependencies]
 anyhow.workspace = true
-
-[target.'cfg(windows)'.build-dependencies]
-cc.workspace = true
-embed-resource.workspace = true
 
 [dependencies]
 anyhow.workspace = true
@@ -106,21 +101,6 @@ wezterm-toast-notification.workspace = true
 wgpu.workspace = true
 window-funcs.workspace = true
 window.workspace = true
-
-[target.'cfg(windows)'.dependencies]
-shared_library.workspace = true
-winapi = { workspace=true, features = [
-    "winuser",
-    "consoleapi",
-    "handleapi",
-    "fileapi",
-    "namedpipeapi",
-    "synchapi",
-    "winsock2",
-]}
-windows = { workspace=true, features = [
-    "Win32_UI_Shell",
-]}
 
 [dev-dependencies]
 benchmarking.workspace = true
