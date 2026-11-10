@@ -66,17 +66,7 @@ fn lock_pid_file(config: &config::ConfigHandle) -> anyhow::Result<std::fs::File>
 }
 
 pub fn daemonize(config: &config::ConfigHandle) -> anyhow::Result<Option<RawFd>> {
-    let pid_file = if !config::running_under_wsl() {
-        // pid file locking is only partly functional when running under
-        // WSL 1; it is possible for the pid file to exist after a reboot
-        // and for attempts to open and lock it to fail when there are no
-        // other processes that might possibly hold a lock on it.
-        // So, we only use a pid file when not under WSL.
-
-        Some(lock_pid_file(config)?)
-    } else {
-        None
-    };
+    let pid_file = Some(lock_pid_file(config)?);
     let stdout = config.daemon_options.open_stdout()?;
     let stderr = config.daemon_options.open_stderr()?;
     let devnull = std::fs::File::open("/dev/null").context("opening /dev/null for read")?;

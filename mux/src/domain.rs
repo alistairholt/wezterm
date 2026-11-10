@@ -1,9 +1,8 @@
 //! A Domain represents an instance of a multiplexer.
 //! For example, the gui frontend has its own domain,
 //! and we can connect to a domain hosted by a mux server
-//! that may be local, running "remotely" inside a WSL
-//! container or actually remote, running on the other end
-//! of an ssh session somewhere.
+//! that may be local or actually remote, running on the
+//! other end of an ssh session somewhere.
 
 use crate::localpane::LocalPane;
 use crate::pane::{alloc_pane_id, Pane, PaneId};
@@ -13,12 +12,11 @@ use crate::Mux;
 use anyhow::{bail, Context, Error};
 use async_trait::async_trait;
 use config::keyassignment::{SpawnCommand, SpawnTabDomain};
-use config::{configuration, ExecDomain, SerialDomain, ValueOrFunc, WslDomain};
+use config::{configuration, ExecDomain, SerialDomain, ValueOrFunc};
 use downcast_rs::{impl_downcast, Downcast};
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, ExitStatus, MasterPty, PtySize, PtySystem};
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -218,14 +216,6 @@ impl LocalDomain {
             .cloned()
     }
 
-    fn resolve_wsl_domain(&self) -> Option<WslDomain> {
-        config::configuration()
-            .wsl_domains()
-            .iter()
-            .find(|d| d.name == self.name)
-            .cloned()
-    }
-
     pub fn with_pty_system(name: &str, pty_system: Box<dyn PtySystem + Send>) -> Self {
         let id = alloc_domain_id();
         Self {
@@ -233,10 +223,6 @@ impl LocalDomain {
             id,
             name: name.to_string(),
         }
-    }
-
-    pub fn new_wsl(wsl: WslDomain) -> Result<Self, Error> {
-        Self::new(&wsl.name)
     }
 
     pub fn new_exec_domain(exec_domain: ExecDomain) -> anyhow::Result<Self> {
@@ -253,55 +239,8 @@ impl LocalDomain {
         Ok(Self::with_pty_system(&serial_domain.name, pty_system))
     }
 
-    #[cfg(unix)]
-    fn is_conpty(&self) -> bool {
-        false
-    }
-
     async fn fixup_command(&self, cmd: &mut CommandBuilder) -> anyhow::Result<()> {
-        if let Some(wsl) = self.resolve_wsl_domain() {
-            let mut args: Vec<OsString> = cmd.get_argv().clone();
-
-            if args.is_empty() {
-                if let Some(def_prog) = &wsl.default_prog {
-                    for arg in def_prog {
-                        args.push(arg.into());
-                    }
-                }
-            }
-
-            let mut argv: Vec<OsString> = vec![
-                "wsl.exe".into(),
-                "--distribution".into(),
-                wsl.distribution
-                    .as_deref()
-                    .unwrap_or(wsl.name.as_str())
-                    .into(),
-            ];
-
-            if let Some(cwd) = cmd.get_cwd() {
-                argv.push("--cd".into());
-                argv.push(cwd.into());
-            }
-
-            if let Some(user) = &wsl.username {
-                argv.push("--user".into());
-                argv.push(user.into());
-            }
-
-            if !args.is_empty() {
-                argv.push("--exec".into());
-                for arg in args {
-                    argv.push(arg);
-                }
-            }
-
-            // TODO: process env list and update WLSENV so that they
-            // get passed through
-
-            cmd.clear_cwd();
-            *cmd.get_argv_mut() = argv;
-        } else if let Some(ed) = self.resolve_exec_domain() {
+        if let Some(ed) = self.resolve_exec_domain() {
             let mut args = vec![];
             let mut set_environment_variables = HashMap::new();
             for arg in cmd.get_argv() {
@@ -445,24 +384,14 @@ impl LocalDomain {
     ) -> anyhow::Result<CommandBuilder> {
         let config = configuration();
 
-        let wsl = self.resolve_wsl_domain();
-        let default_prog = wsl
-            .as_ref()
-            .map(|wsl| wsl.default_prog.as_ref())
-            .unwrap_or(config.default_prog.as_ref());
+        let default_prog = config.default_prog.as_ref();
 
         let mut cmd = match command {
             Some(mut cmd) => {
                 config.apply_cmd_defaults(&mut cmd, default_prog, config.default_cwd.as_ref());
                 cmd
             }
-            None => config.build_prog(
-                None,
-                default_prog,
-                wsl.as_ref()
-                    .map(|wsl| wsl.default_cwd.as_ref())
-                    .unwrap_or(config.default_cwd.as_ref()),
-            )?,
+            None => config.build_prog(None, default_prog, config.default_cwd.as_ref())?,
         };
         if let Some(dir) = command_dir {
             cmd.cwd(dir);
@@ -604,16 +533,13 @@ impl Domain for LocalDomain {
         let child_result = pair.slave.spawn_command(cmd);
         let mut writer = WriterWrapper::new(pair.master.take_writer()?);
 
-        let mut terminal = wezterm_term::Terminal::new(
+        let terminal = wezterm_term::Terminal::new(
             size,
             std::sync::Arc::new(config::TermConfig::new()),
             "WezTerm",
             config::wezterm_version(),
             Box::new(writer.clone()),
         );
-        if self.is_conpty() {
-            terminal.enable_conpty_quirks();
-        }
 
         let pane: Arc<dyn Pane> = match child_result {
             Ok(child) => Arc::new(LocalPane::new(
@@ -693,8 +619,6 @@ impl Domain for LocalDomain {
                 }
                 _ => self.name.to_string(),
             }
-        } else if let Some(wsl) = self.resolve_wsl_domain() {
-            wsl.distribution.unwrap_or_else(|| self.name.to_string())
         } else {
             self.name.to_string()
         }
