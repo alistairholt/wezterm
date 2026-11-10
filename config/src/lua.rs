@@ -245,11 +245,6 @@ pub fn make_lua_context(config_file: &Path) -> anyhow::Result<Lua> {
                             .ok_or_else(|| anyhow!("current_exe path is not UTF-8"))?,
                     )
                     .context("set wezterm.executable_dir")?;
-                if cfg!(windows) {
-                    // For a portable windows install, force in this path ahead
-                    // of the rest
-                    prefix_path(&mut path_array, &path.join("wezterm_modules"));
-                }
             }
         }
         let config_file_str = config_file

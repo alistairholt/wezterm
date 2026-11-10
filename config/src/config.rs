@@ -987,35 +987,6 @@ impl Config {
             }
         }
 
-        #[cfg(all(unix, not(target_os = "macos")))]
-        {
-            use nix::sys::resource::{getrlimit, rlim_t, setrlimit, Resource};
-            use std::convert::TryInto;
-
-            let (nproc_soft, nproc_hard) = getrlimit(Resource::RLIMIT_NPROC)?;
-
-            let ulimit_nproc: rlim_t = self.ulimit_nproc.try_into().with_context(|| {
-                format!(
-                    "ulimit_nproc value {} is out of range for this system",
-                    self.ulimit_nproc
-                )
-            })?;
-
-            if nproc_soft < ulimit_nproc {
-                setrlimit(
-                    Resource::RLIMIT_NPROC,
-                    ulimit_nproc.min(nproc_hard),
-                    nproc_hard,
-                )
-                .with_context(|| {
-                    format!(
-                        "raise RLIMIT_NPROC from {nproc_soft} to ulimit_nproc {}",
-                        ulimit_nproc
-                    )
-                })?;
-            }
-        }
-
         Ok(())
     }
 
@@ -1030,21 +1001,6 @@ impl Config {
             paths.push(PathPossibility::optional(dir.join("wezterm.lua")))
         }
 
-        if cfg!(windows) {
-            // On Windows, a common use case is to maintain a thumb drive
-            // with a set of portable tools that don't need to be installed
-            // to run on a target system.  In that scenario, the user would
-            // like to run with the config from their thumbdrive because
-            // either the target system won't have any config, or will have
-            // the config of another user.
-            // So we prioritize that here: if there is a config in the same
-            // dir as the executable that will take precedence.
-            if let Ok(exe_name) = std::env::current_exe() {
-                if let Some(exe_dir) = exe_name.parent() {
-                    paths.insert(0, PathPossibility::optional(exe_dir.join("wezterm.lua")));
-                }
-            }
-        }
         if let Some(path) = std::env::var_os("WEZTERM_CONFIG_FILE") {
             log::trace!("Note: WEZTERM_CONFIG_FILE is set in the environment");
             paths.insert(0, PathPossibility::required(path.into()));
@@ -1430,14 +1386,6 @@ impl Config {
         let mut paths = self.color_scheme_dirs.clone();
         for dir in CONFIG_DIRS.iter() {
             paths.push(dir.join("colors"));
-        }
-        if cfg!(windows) {
-            // See commentary re: portable tools above!
-            if let Ok(exe_name) = std::env::current_exe() {
-                if let Some(exe_dir) = exe_name.parent() {
-                    paths.insert(0, exe_dir.join("colors"));
-                }
-            }
         }
         paths
     }
@@ -1892,7 +1840,7 @@ fn default_update_interval() -> u64 {
 }
 
 fn default_prefer_egl() -> bool {
-    !cfg!(windows)
+    true
 }
 
 fn default_clean_exits() -> Vec<u32> {
@@ -2069,11 +2017,7 @@ pub enum DroppedFileQuoting {
 
 impl Default for DroppedFileQuoting {
     fn default() -> Self {
-        if cfg!(windows) {
-            Self::Windows
-        } else {
-            Self::SpacesOnly
-        }
+        Self::SpacesOnly
     }
 }
 
