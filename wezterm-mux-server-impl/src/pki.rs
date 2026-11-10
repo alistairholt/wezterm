@@ -3,8 +3,6 @@ use anyhow::{anyhow, Context as _};
 use libc::{AF_UNSPEC, AI_CANONNAME, SOCK_DGRAM};
 use rcgen::{BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, IsCa};
 use std::path::PathBuf;
-#[cfg(windows)]
-use windows_sys::Win32::Networking::WinSock::{AF_UNSPEC, AI_CANONNAME, SOCK_DGRAM};
 
 /// A helper for managing keys for the TLS server component.
 /// Each time the server is started, a new CA is generated
