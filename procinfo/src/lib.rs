@@ -4,9 +4,7 @@ use std::path::PathBuf;
 #[cfg(feature = "lua")]
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 
-mod linux;
 mod macos;
-mod windows;
 
 #[derive(Debug, Copy, Clone)]
 #[cfg_attr(feature = "lua", derive(FromDynamic, ToDynamic))]
@@ -53,9 +51,6 @@ pub struct LocalProcessInfo {
     /// A clock value in unspecified system dependent units that
     /// indicates the relative age of the process.
     pub start_time: u64,
-    /// The console handle associated with the process, if any.
-    #[cfg(windows)]
-    pub console: u64,
     /// Child processes, keyed by pid
     pub children: HashMap<u32, LocalProcessInfo>,
 }
@@ -80,20 +75,5 @@ impl LocalProcessInfo {
 
         flatten(self, &mut names);
         names
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-    pub fn with_root_pid(_pid: u32) -> Option<Self> {
-        None
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-    pub fn current_working_dir(_pid: u32) -> Option<PathBuf> {
-        None
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-    pub fn executable_path(_pid: u32) -> Option<PathBuf> {
-        None
     }
 }

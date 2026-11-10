@@ -15,14 +15,3 @@ log.workspace = true
 luahelper = { workspace=true, optional = true }
 wezterm-dynamic = { workspace=true, optional = true, features=["std"]}
 
-[target."cfg(windows)".dependencies]
-ntapi.workspace = true
-winapi = { workspace=true, features = [
-    "handleapi",
-    "memoryapi",
-    "psapi",
-    "processthreadsapi",
-    "shellapi",
-    "tlhelp32",
-]}
-
