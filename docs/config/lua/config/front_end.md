@@ -2,7 +2,7 @@
 tags:
   - gpu
 ---
-# `front_end = "OpenGL"`
+# `front_end = "WebGpu"`
 
 Specifies which render front-end to use.  This option used to have
 more scope in earlier versions of wezterm, but today it allows three
@@ -17,6 +17,10 @@ possible values:
 
 {{since('20240128-202157-1e552d76', outline=true)}}
     The default has been reverted to `"OpenGL"`.
+
+{{since('nightly', outline=true)}}
+    On this macOS-only fork the default is `"WebGpu"` (Metal). Set
+    `front_end = "OpenGL"` to go back to the OpenGL renderer.
 
 You may wish (or need!) to select `Software` if there are issues with your
 GPU/OpenGL drivers.
