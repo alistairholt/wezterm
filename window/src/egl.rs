@@ -33,9 +33,6 @@ pub mod ffi {
     pub type EGLNativeDisplayType = *const raw::c_void;
     pub type EGLNativePixmapType = *const raw::c_void;
 
-    #[cfg(target_os = "windows")]
-    pub type EGLNativeWindowType = winapi::shared::windef::HWND;
-    #[cfg(not(target_os = "windows"))]
     pub type EGLNativeWindowType = *const raw::c_void;
 }
 
@@ -395,7 +392,7 @@ impl EglWrapper {
 }
 
 impl GlState {
-    #[cfg_attr(any(windows, target_os = "macos"), allow(unused))]
+    #[allow(unused)]
     pub fn get_connection(&self) -> &Rc<GlConnection> {
         &self.connection
     }
@@ -403,90 +400,44 @@ impl GlState {
     fn with_egl_lib<F: FnMut(EglWrapper) -> anyhow::Result<Self>>(
         mut func: F,
     ) -> anyhow::Result<Self> {
-        let mut paths: Vec<std::path::PathBuf> = vec![
-            #[cfg(target_os = "windows")]
-            "libEGL.dll".into(),
-            #[cfg(target_os = "windows")]
-            "atioglxx.dll".into(),
-            #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-            "libEGL.so.1".into(),
-            #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-            "libEGL.so".into(),
+        // Look in the application directory to see if we've deployed
+        // libEGL.dylib alongside; if so, we want to try loading that.
+        // And just in case, also allow loading via DYLD_LIBRARY_PATH.
+        let paths: Vec<std::path::PathBuf> = vec![
+            std::env::current_exe()?
+                .parent()
+                .ok_or_else(|| anyhow!("current_exe isn't in a directory!?"))?
+                .join("libEGL.dylib"),
+            "libEGL.dylib".into(),
         ];
 
-        if cfg!(target_os = "macos") {
-            // On macOS, let's look in the application directory to see
-            // if we've deployed libEGL.dylib alongside; if so, we want
-            // to try loading that.
-            paths.push(
-                std::env::current_exe()?
-                    .parent()
-                    .ok_or_else(|| anyhow!("current_exe isn't in a directory!?"))?
-                    .join("libEGL.dylib"),
-            );
-
-            // And just in case, let's also allow loading via
-            // DYLD_LIBRARY_PATH
-            paths.push("libEGL.dylib".into());
-        }
-
         let mut errors = vec![];
-        let mut prefer_swrast = crate::configuration::prefer_swrast();
-
-        for _ in 0..2 {
-            if prefer_swrast {
-                // Assuming that we're using Mesa, set an environment
-                // variable that should select CPU based rendering.
-                std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "true");
-            }
-            for path in &paths {
-                match unsafe { libloading::Library::new(path) } {
-                    Ok(lib) => match EglWrapper::load_egl(lib) {
-                        Ok(egl) => match func(egl) {
-                            Ok(result) => {
-                                return Ok(result);
-                            }
-                            Err(e) => {
-                                errors.push(format!(
-                                    "with_egl_lib({}) failed: {}",
-                                    path.display(),
-                                    e
-                                ));
-                            }
-                        },
+        if crate::configuration::prefer_swrast() {
+            // Assuming that we're using Mesa, set an environment
+            // variable that should select CPU based rendering.
+            std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "true");
+        }
+        for path in &paths {
+            match unsafe { libloading::Library::new(path) } {
+                Ok(lib) => match EglWrapper::load_egl(lib) {
+                    Ok(egl) => match func(egl) {
+                        Ok(result) => {
+                            return Ok(result);
+                        }
                         Err(e) => {
-                            errors.push(format!("load_egl {} failed: {}", path.display(), e));
+                            errors.push(format!("with_egl_lib({}) failed: {}", path.display(), e));
                         }
                     },
                     Err(e) => {
-                        errors.push(format!("{}: {}", path.display(), e));
+                        errors.push(format!("load_egl {} failed: {}", path.display(), e));
                     }
+                },
+                Err(e) => {
+                    errors.push(format!("{}: {}", path.display(), e));
                 }
             }
-            // Since we didn't yet succeed, try enabling software rasterization.
-            // However, don't do this on Windows; the EGL implementation on
-            // Windows isn't MESA so there's no point trying a second pass
-            // with the mesa environment set, and if we did, it would just
-            // cause us to try software mode instead of the native opengl
-            // drivers we'd pick up from the WGL fallback.
-            if cfg!(windows) || cfg!(target_os = "macos") {
-                break;
-            }
-            if prefer_swrast {
-                break;
-            }
-            prefer_swrast = true;
         }
         bail!("with_egl_lib failed: {}", errors.join(", "))
-    }
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    #[cfg(feature = "wayland")]
-    pub fn create_wayland(
-        display: Option<ffi::EGLNativeDisplayType>,
-        wegl_surface: &wayland_egl::WlEglSurface,
-    ) -> anyhow::Result<Self> {
-        Self::create(display, wegl_surface.ptr())
     }
 
     pub fn create(
@@ -529,15 +480,6 @@ impl GlState {
 
             Self::create_with_existing_connection(&connection, window)
         })
-    }
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    #[cfg(feature = "wayland")]
-    pub fn create_wayland_with_existing_connection(
-        connection: &Rc<GlConnection>,
-        wegl_surface: &wayland_egl::WlEglSurface,
-    ) -> anyhow::Result<Self> {
-        Self::create_with_existing_connection(connection, wegl_surface.ptr())
     }
 
     pub fn create_with_existing_connection(
@@ -609,20 +551,7 @@ impl GlState {
                     }
                 };
 
-            let mut attributes = vec![ffi::CONTEXT_MAJOR_VERSION, 3];
-            if cfg!(windows) {
-                // On Windows, where drivers may be dynamically unloaded,
-                // let's make an effort to try to survive that event.
-                for &a in &[
-                    ffi::CONTEXT_OPENGL_ROBUST_ACCESS_EXT,
-                    ffi::TRUE,
-                    ffi::CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT,
-                    ffi::LOSE_CONTEXT_ON_RESET_EXT,
-                ] {
-                    attributes.push(a);
-                }
-            }
-            attributes.push(ffi::NONE);
+            let attributes = vec![ffi::CONTEXT_MAJOR_VERSION, 3, ffi::NONE];
 
             let context = match connection.egl.create_context(
                 connection.display,
