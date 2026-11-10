@@ -1248,7 +1248,34 @@ impl WindowInner {
 
             self.update_titlebar_background();
 
-            self.window.makeKeyAndOrderFront_(nil)
+            self.window.makeKeyAndOrderFront_(nil);
+        }
+        debug_resize::maybe_start(self);
+    }
+
+    /// Debug resize driver step: grow the window by (dw, dh) points while
+    /// keeping its top-left corner fixed, and display synchronously, as
+    /// AppKit does for each step of a live resize.
+    fn debug_resize_step(&mut self, dw: f64, dh: f64) {
+        unsafe {
+            let mut frame = NSWindow::frame(*self.window);
+            frame.size.width = (frame.size.width + dw).max(100.);
+            frame.size.height = (frame.size.height + dh).max(100.);
+            // Cocoa's origin is bottom-left; move it down so the top edge stays put.
+            frame.origin.y -= dh;
+            self.window.setFrame_display_(frame, YES);
+        }
+    }
+
+    /// Debug resize driver: mark the start or end of a simulated live resize.
+    fn debug_set_live_resizing(&mut self, live: bool) {
+        unsafe {
+            if live {
+                WindowView::will_start_live_resize(&mut **self.view, sel!(windowWillStartLiveResize:), nil);
+            } else {
+                WindowView::did_end_live_resize(&mut **self.view, sel!(windowDidEndLiveResize:), nil);
+                let () = msg_send![*self.view, setNeedsDisplay: YES];
+            }
         }
     }
 
@@ -3512,5 +3539,116 @@ impl WindowView {
         }
 
         cls.register()
+    }
+}
+
+/// Debug-only resize driver for testing live resize without a mouse.
+///
+/// Set `WEZTERM_DEBUG_RESIZE` before launching. The first window shown
+/// runs the script once, then the process carries on as normal. Script:
+///
+/// `delay_ms;segment;segment;...` where each segment is
+/// `steps,interval_ms,dw,dh[,hold_ms]`: `steps` resize steps of
+/// (dw, dh) points each, `interval_ms` apart, then a pause of `hold_ms`.
+///
+/// Example: `1500;60,30,-5,0,500` shrinks the width by 300 points over 60
+/// steps, then holds for half a second. All segments run inside one
+/// simulated live resize (windowWillStartLiveResize / DidEnd), and each
+/// step calls setFrame:display:YES. Each step is logged at info level
+/// with the host time in seconds (the clock used by CACurrentMediaTime and
+/// by motionrec's frames.csv), so recordings can be lined up with steps.
+mod debug_resize {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    static STARTED: AtomicBool = AtomicBool::new(false);
+
+    struct Segment {
+        steps: u32,
+        interval: Duration,
+        dw: f64,
+        dh: f64,
+        hold: Duration,
+    }
+
+    fn parse(spec: &str) -> anyhow::Result<(Duration, Vec<Segment>)> {
+        let mut parts = spec.split(';');
+        let delay = Duration::from_millis(parts.next().unwrap_or("0").trim().parse()?);
+        let mut segments = vec![];
+        for seg in parts {
+            let f: Vec<&str> = seg.split(',').map(str::trim).collect();
+            anyhow::ensure!(f.len() == 4 || f.len() == 5, "bad segment {seg:?}");
+            segments.push(Segment {
+                steps: f[0].parse()?,
+                interval: Duration::from_millis(f[1].parse()?),
+                dw: f[2].parse()?,
+                dh: f[3].parse()?,
+                hold: Duration::from_millis(if f.len() == 5 { f[4].parse()? } else { 0 }),
+            });
+        }
+        Ok((delay, segments))
+    }
+
+    #[link(name = "QuartzCore", kind = "framework")]
+    extern "C" {
+        fn CACurrentMediaTime() -> f64;
+    }
+
+    /// Host time in seconds (CACurrentMediaTime), the clock motionrec logs.
+    fn host_time() -> f64 {
+        unsafe { CACurrentMediaTime() }
+    }
+
+    async fn on_window(
+        window_id: usize,
+        f: impl FnOnce(&mut WindowInner) + Send + 'static,
+    ) {
+        let _ = Connection::with_window_inner(window_id, move |inner| {
+            f(inner);
+            Ok(())
+        })
+        .await;
+    }
+
+    pub(super) fn maybe_start(inner: &WindowInner) {
+        let Ok(spec) = std::env::var("WEZTERM_DEBUG_RESIZE") else {
+            return;
+        };
+        if STARTED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let (delay, segments) = match parse(&spec) {
+            Ok(s) => s,
+            Err(err) => {
+                log::error!("WEZTERM_DEBUG_RESIZE: {err:#}");
+                return;
+            }
+        };
+        let Some(window_id) = WindowView::get_this(unsafe { &**inner.view })
+            .map(|view| view.inner.borrow().window_id)
+        else {
+            return;
+        };
+        promise::spawn::spawn(async move {
+            async_io::Timer::after(delay).await;
+            log::info!("debug-resize begin host_time={:.6}", host_time());
+            on_window(window_id, |w| w.debug_set_live_resizing(true)).await;
+            for (n, seg) in segments.iter().enumerate() {
+                for step in 0..seg.steps {
+                    let (dw, dh) = (seg.dw, seg.dh);
+                    on_window(window_id, move |w| w.debug_resize_step(dw, dh)).await;
+                    log::info!(
+                        "debug-resize segment={n} step={step} host_time={:.6}",
+                        host_time()
+                    );
+                    async_io::Timer::after(seg.interval).await;
+                }
+                async_io::Timer::after(seg.hold).await;
+            }
+            on_window(window_id, |w| w.debug_set_live_resizing(false)).await;
+            log::info!("debug-resize end host_time={:.6}", host_time());
+        })
+        .detach();
     }
 }
