@@ -1,0 +1,15 @@
+[package]
+name = "metal-present-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Standalone throwaway crate, not a workspace member.
+[workspace]
+
+[dependencies]
+wgpu = { version = "=25.0.2", default-features = false, features = ["metal", "wgsl"] }
+metal = "=0.31.0"
+objc = "0.2"
+core-graphics-types = "0.1"
+pollster = "0.4"
