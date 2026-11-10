@@ -23,7 +23,6 @@ on:
 jobs:
   build:
     runs-on: "macos-latest"
-    
     env:
       BUILD_REASON: "Schedule"
       CARGO_INCREMENTAL: "0"
