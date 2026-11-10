@@ -74,6 +74,7 @@ pub mod box_model;
 pub mod charselect;
 pub mod clipboard;
 pub mod keyevent;
+pub mod metal_present;
 pub mod modal;
 mod mouseevent;
 pub mod palette;
