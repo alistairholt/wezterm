@@ -511,17 +511,12 @@ impl ImgCatCommand {
 
         let is_tmux = xt_version.is_tmux();
 
-        // TODO: ideally we'd do some kind of probing to see if conpty
-        // is in the mix. For now we just assume that if we are on windows
-        // then it must be in there somewhere.
-        let is_conpty = cfg!(windows);
-
         // Not all systems understand that the cursor should move as
         // part of processing the image escapes, so we need to move it
         // explicitly after we've drawn things.
         // We can only do this reasonably sanely if we aren't setting
         // the absolute position.
-        let needs_force_cursor_move = !self.no_move_cursor && !self.position.is_some() && (is_tmux || is_conpty)
+        let needs_force_cursor_move = !self.no_move_cursor && !self.position.is_some() && is_tmux
             // We can only use forced movement if we know the pixel geometry
             && (term_size.xpixel != 0 && term_size.ypixel != 0);
 
@@ -771,21 +766,12 @@ fn delegate_to_gui(saver: UmaskSaver) -> anyhow::Result<()> {
     // Restore the original umask
     drop(saver);
 
-    let exe_name = if cfg!(windows) {
-        "wezterm-gui.exe"
-    } else {
-        "wezterm-gui"
-    };
-
     let exe = std::env::current_exe()?
         .parent()
         .ok_or_else(|| anyhow!("exe has no parent dir!?"))?
-        .join(exe_name);
+        .join("wezterm-gui");
 
     let mut cmd = Command::new(exe);
-    if cfg!(windows) {
-        cmd.arg("--attach-parent-console");
-    }
 
     cmd.args(std::env::args_os().skip(1));
 
@@ -801,13 +787,5 @@ fn delegate_to_gui(saver: UmaskSaver) -> anyhow::Result<()> {
         }
         let res = cmd.exec();
         return Err(anyhow::anyhow!("failed to exec {cmd:?}: {res:?}"));
-    }
-
-    #[cfg(windows)]
-    {
-        let mut child = cmd.spawn()?;
-        let status = child.wait()?;
-        let code = status.code().unwrap_or(1);
-        std::process::exit(code);
     }
 }
