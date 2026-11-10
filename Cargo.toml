@@ -98,7 +98,6 @@ fixed = "1.23"
 fixedbitset = {version="0.4", default-features=false}
 flume = "0.11"
 fnv = "1.0"
-fontconfig = { path = "deps/fontconfig" }
 frecency = { path = "frecency" }
 freetype = { path = "deps/freetype" }
 futures = "0.3"

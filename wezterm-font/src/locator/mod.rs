@@ -8,23 +8,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub mod core_text;
-#[cfg(all(unix, not(target_os = "macos")))]
-pub mod font_config;
-pub mod gdi;
 
 #[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum FontOrigin {
-    FontConfig,
-    FontConfigMatch(String),
     CoreText,
-    DirectWrite,
-    Gdi,
     FontDirs,
     BuiltIn,
 }
 
-// derived impl would just use the inner string instead of
-// 'FontConfigMatch("..")', so use Debug
 impl Display for FontOrigin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
@@ -221,24 +212,7 @@ pub trait FontLocator {
 
 pub fn new_locator(locator: FontLocatorSelection) -> Arc<dyn FontLocator + Send + Sync> {
     match locator {
-        FontLocatorSelection::FontConfig => {
-            #[cfg(all(unix, not(target_os = "macos")))]
-            return Arc::new(font_config::FontConfigFontLocator {});
-            #[cfg(not(all(unix, not(target_os = "macos"))))]
-            panic!("fontconfig not compiled in");
-        }
-        FontLocatorSelection::CoreText => {
-            #[cfg(target_os = "macos")]
-            return Arc::new(core_text::CoreTextFontLocator {});
-            #[cfg(not(target_os = "macos"))]
-            panic!("CoreText not compiled in");
-        }
-        FontLocatorSelection::Gdi => {
-            #[cfg(windows)]
-            return Arc::new(gdi::GdiFontLocator {});
-            #[cfg(not(windows))]
-            panic!("Gdi not compiled in");
-        }
+        FontLocatorSelection::CoreText => Arc::new(core_text::CoreTextFontLocator {}),
         FontLocatorSelection::ConfigDirsOnly => Arc::new(NopSystemSource {}),
     }
 }
@@ -275,9 +249,8 @@ mod test {
 
     #[test]
     fn test_memory_datasource() {
-        // This is currently only used on Windows, so make sure
-        // that we have compiler coverage of constructing it on
-        // other systems
+        // Nothing constructs this on macOS, so make sure that
+        // we have compiler coverage of it
         let data = b"hello".to_vec();
         let source = FontDataSource::Memory {
             data: Arc::new(data.into_boxed_slice()),
