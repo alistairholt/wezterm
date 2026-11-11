@@ -70,6 +70,9 @@ impl GuiFrontEnd {
                 | MuxNotification::WindowCreated(_)
                 | MuxNotification::WindowRemoved(_) => {
                     promise::spawn::spawn_into_main_thread(async move {
+                        if Mux::get().iter_windows().is_empty() {
+                            crate::termwindow::discard_closed_tabs();
+                        }
                         let fe = crate::frontend::front_end();
                         if !fe.is_switching_workspace() {
                             fe.reconcile_workspace();
