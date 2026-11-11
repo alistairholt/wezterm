@@ -107,8 +107,23 @@ impl crate::TermWindow {
             .iter()
             .filter(|item| matches!(item.item, TabBarItem::Tab { .. }))
             .count();
-        // A pill as tall as a tab: one line plus its padding above and below.
-        let pill_radius = Dimension::Pixels(metrics.cell_size.height as f32 * 0.75);
+        // DEBUG knobs for tuning Flat and Capsule tabs, read from the
+        // environment: WEZTERM_TAB_PAD_X and WEZTERM_TAB_PAD_Y (cells),
+        // WEZTERM_TAB_RADIUS (corner radius as a fraction of the tab's
+        // height; 0.5 makes a full capsule) and WEZTERM_TAB_CORNER
+        // ("round" for circular corners, else superellipse).
+        let knob = |name: &str, default: f32| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(default)
+        };
+        let pad_x = knob("WEZTERM_TAB_PAD_X", 0.75);
+        let pad_y = knob("WEZTERM_TAB_PAD_Y", 0.25);
+        let radius_frac = knob("WEZTERM_TAB_RADIUS", 0.5).clamp(0., 0.5);
+        let round_corners = std::env::var("WEZTERM_TAB_CORNER").as_deref() == Ok("round");
+        let tab_height = metrics.cell_size.height as f32 * (1. + 2. * pad_y);
+        let pill_radius = Dimension::Pixels(tab_height * radius_frac);
 
         let tab_vertical_alignment = if self.config.tab_bar_at_bottom {
             VerticalAlign::Top
@@ -235,23 +250,42 @@ impl crate::TermWindow {
                         .item_type(UIItemType::TabBar(item.item.clone()))
                         .margin(BoxDimension::new(Dimension::Cells(0.)))
                         .padding(BoxDimension {
-                            left: Dimension::Cells(0.75),
-                            right: Dimension::Cells(0.75),
-                            top: Dimension::Cells(0.25),
-                            bottom: Dimension::Cells(0.25),
+                            left: Dimension::Cells(pad_x),
+                            right: Dimension::Cells(pad_x),
+                            top: Dimension::Cells(pad_y),
+                            bottom: Dimension::Cells(pad_y),
                         })
                         .border(BoxDimension {
                             left: Dimension::Pixels(0.),
-                            right: Dimension::Pixels(if divider { 1. } else { 0. }),
+                            // Always 1px, so tabs don't shift when a
+                            // divider hides; a hidden one is drawn in the
+                            // tab's own background.
+                            right: Dimension::Pixels(1.),
                             top: Dimension::Pixels(0.),
                             bottom: Dimension::Pixels(0.),
                         })
                         .border_corners(if pill {
                             Some(Corners {
-                                top_left: rounded(TOP_LEFT_ROUNDED_CORNER),
-                                top_right: rounded(TOP_RIGHT_ROUNDED_CORNER),
-                                bottom_left: rounded(BOTTOM_LEFT_ROUNDED_CORNER),
-                                bottom_right: rounded(BOTTOM_RIGHT_ROUNDED_CORNER),
+                                top_left: rounded(if round_corners {
+                                    TOP_LEFT_ROUNDED_CORNER
+                                } else {
+                                    TOP_LEFT_SUPERELLIPSE_CORNER
+                                }),
+                                top_right: rounded(if round_corners {
+                                    TOP_RIGHT_ROUNDED_CORNER
+                                } else {
+                                    TOP_RIGHT_SUPERELLIPSE_CORNER
+                                }),
+                                bottom_left: rounded(if round_corners {
+                                    BOTTOM_LEFT_ROUNDED_CORNER
+                                } else {
+                                    BOTTOM_LEFT_SUPERELLIPSE_CORNER
+                                }),
+                                bottom_right: rounded(if round_corners {
+                                    BOTTOM_RIGHT_ROUNDED_CORNER
+                                } else {
+                                    BOTTOM_RIGHT_SUPERELLIPSE_CORNER
+                                }),
                             })
                         } else {
                             None
@@ -558,7 +592,13 @@ impl crate::TermWindow {
 
         children.push(
             Element::new(&font, ElementContent::Children(left_eles))
-                .vertical_align(tab_vertical_alignment)
+                // Flat and Capsule tabs sit in the middle of the bar, level
+                // with the traffic lights; Default tabs join the pane.
+                .vertical_align(if style == FancyTabStyle::Default {
+                    tab_vertical_alignment
+                } else {
+                    VerticalAlign::Middle
+                })
                 .colors(bar_colors.clone())
                 .padding(BoxDimension {
                     left: left_padding,

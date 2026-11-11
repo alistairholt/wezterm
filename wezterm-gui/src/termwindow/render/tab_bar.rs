@@ -113,9 +113,38 @@ impl crate::TermWindow {
     ) -> anyhow::Result<f32> {
         if config.use_fancy_tab_bar {
             let font = fontconfig.title_font()?;
-            Ok((font.metrics().cell_height.get() as f32 * 1.75).ceil())
+            let height = font.metrics().cell_height.get() as f32 * 1.75;
+            Ok(height
+                .max(Self::traffic_light_bar_height(config, fontconfig))
+                .ceil())
         } else {
             Ok(render_metrics.cell_size.height as f32)
+        }
+    }
+
+    /// With the macOS traffic lights in a Flat or Capsule tab bar, the bar
+    /// is at least twice as tall as the lights' center is from the top of
+    /// the window, so they have equal space above and below them.
+    fn traffic_light_bar_height(
+        config: &ConfigHandle,
+        fontconfig: &wezterm_font::FontConfiguration,
+    ) -> f32 {
+        // Where AppKit puts the center of the traffic lights, in points
+        // below the top of the window (measured on macOS 26).
+        const TRAFFIC_LIGHT_CENTER: f32 = 15.75;
+        let native_buttons = config
+            .window_decorations
+            .contains(::window::WindowDecorations::INTEGRATED_BUTTONS)
+            && config.integrated_title_button_style
+                == ::window::IntegratedTitleButtonStyle::MacOsNative;
+        if cfg!(target_os = "macos")
+            && native_buttons
+            && config.fancy_tab_style != config::FancyTabStyle::Default
+        {
+            // macOS reports 72 dpi per point of backing scale.
+            2. * TRAFFIC_LIGHT_CENTER * fontconfig.get_dpi() as f32 / 72.
+        } else {
+            0.
         }
     }
 
