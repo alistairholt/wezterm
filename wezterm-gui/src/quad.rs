@@ -333,7 +333,7 @@ impl HeapQuadAllocator {
                 other.extend_with(layer_num, &quad.to_vertices());
             }
         }
-        metrics::histogram!("quad_buffer_apply").record(start.elapsed());
+        crate::stats::cached_histogram!("quad_buffer_apply").record(start.elapsed());
         Ok(())
     }
 }
