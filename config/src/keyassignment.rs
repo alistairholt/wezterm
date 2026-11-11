@@ -589,6 +589,7 @@ pub enum KeyAssignment {
     ShowLastCommandOutputInPager,
     CopyLastCommandOutput,
     SelectLastCommandOutput,
+    FindCursor,
     NotifyWhenCommandFinishes,
     SaveScrollbackToFile,
     ToggleWindowOpacity,

@@ -243,6 +243,37 @@ impl crate::TermWindow {
             }
         }
 
+        // FindCursor, like iTerm2's "Find Cursor": a crosshair through
+        // the cursor's row and column that fades out. Like the cursor
+        // guide it sits behind the text.
+        if pos.is_active {
+            if let Some(intensity) = self.find_cursor_intensity(pane_id) {
+                let viewport_top = current_viewport.unwrap_or(dims.physical_top);
+                let row = cursor.y - viewport_top;
+                if row >= 0 && (row as usize) < pos.height && cursor.x < pos.width {
+                    let color = palette.cursor_bg.to_linear().mul_alpha(0.6 * intensity);
+                    let row_rect = euclid::rect(
+                        background_rect.origin.x,
+                        top_pixel_y + (pos.top as f32 + row as f32) * cell_height,
+                        background_rect.size.width,
+                        cell_height,
+                    );
+                    self.filled_rectangle(layers, 0, row_rect, color)
+                        .context("filled_rectangle")?;
+                    let column_rect = euclid::rect(
+                        padding_left
+                            + border.left.get() as f32
+                            + (pos.left + cursor.x) as f32 * cell_width,
+                        background_rect.origin.y,
+                        cell_width,
+                        background_rect.size.height,
+                    );
+                    self.filled_rectangle(layers, 0, column_rect, color)
+                        .context("filled_rectangle")?;
+                }
+            }
+        }
+
         // TODO: we only have a single scrollbar in a single position.
         // We only update it for the active pane, but we should probably
         // do a per-pane scrollbar.  That will require more extensive

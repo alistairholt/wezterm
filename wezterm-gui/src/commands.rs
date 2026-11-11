@@ -941,6 +941,16 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Edit"],
             icon: Some("md_content_copy"),
         },
+        FindCursor => CommandDef {
+            brief: "Find Cursor".into(),
+            doc: "Briefly draws a crosshair through the cursor so you can \
+              spot it, scrolling to the bottom first if needed."
+                .into(),
+            keys: vec![(Modifiers::SUPER, "/".into())],
+            args: &[ArgType::ActivePane],
+            menubar: &["View"],
+            icon: Some("md_crosshairs_gps"),
+        },
         SelectLastCommandOutput => CommandDef {
             brief: "Select output of last command".into(),
             doc: "Selects the output of the last command that printed \
@@ -2332,6 +2342,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ShowLastCommandOutputInPager,
         CopyLastCommandOutput,
         SelectLastCommandOutput,
+        FindCursor,
         QuickSelect,
         CharSelect(CharSelectArguments::default()),
         ActivateCopyMode,

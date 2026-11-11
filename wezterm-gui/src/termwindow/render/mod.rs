@@ -230,6 +230,30 @@ impl crate::TermWindow {
         }
     }
 
+    /// How strongly to draw the FindCursor crosshair in this pane, or
+    /// None once it has faded out.
+    fn find_cursor_intensity(&self, pane_id: PaneId) -> Option<f32> {
+        let mut per_pane = self.pane_state(pane_id);
+        let start = per_pane.find_cursor_start?;
+        let mut ease = ColorEase::new(
+            150,
+            config::EasingFunction::EaseOut,
+            1000,
+            config::EasingFunction::EaseIn,
+            Some(start),
+        );
+        match ease.intensity_one_shot() {
+            Some((intensity, next)) => {
+                self.update_next_frame_time(Some(next));
+                Some(intensity)
+            }
+            None => {
+                per_pane.find_cursor_start.take();
+                None
+            }
+        }
+    }
+
     fn get_intensity_if_bell_target_ringing(
         &self,
         pane: &Arc<dyn Pane>,
