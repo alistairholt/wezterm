@@ -158,6 +158,9 @@ As features stabilize some brief notes about them will accumulate here.
   shows a desktop notification when a long command finishes in a pane
   you aren't looking at, as kitty does. Needs shell integration. Off by
   default.
+* [remember_window_size](config/lua/config/remember_window_size.md)
+  opens new windows at the size of the last window you resized or
+  closed, as kitty does. Off by default.
 * [macos_dock_badge_on_bell](config/lua/config/macos_dock_badge_on_bell.md)
   badges the Dock icon with the number of tabs that have a bell you
   haven't seen, as Terminal.app does. On by default.

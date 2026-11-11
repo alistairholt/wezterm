@@ -253,7 +253,6 @@ impl GuiFrontEnd {
                 };
                 promise::spawn::spawn(async move {
                     use config::keyassignment::SpawnTabDomain;
-                    use wezterm_term::TerminalSize;
 
                     // Run the script through the user's shell as a login,
                     // interactive shell, so it reads the user's rc files
@@ -279,6 +278,10 @@ impl GuiFrontEnd {
                         None
                     };
                     let workspace = mux.active_workspace();
+                    let config = config::configuration();
+                    let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi());
+                    let size =
+                        config.initial_size(dpi as u32, crate::cell_pixel_dims(&config, dpi).ok());
 
                     match mux
                         .spawn_tab_or_window(
@@ -286,7 +289,7 @@ impl GuiFrontEnd {
                             SpawnTabDomain::DomainName("local".to_string()),
                             cmd,
                             cwd,
-                            TerminalSize::default(),
+                            size,
                             pane_id,
                             workspace,
                             None, // optional position

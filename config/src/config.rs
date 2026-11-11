@@ -257,6 +257,11 @@ pub struct Config {
     #[dynamic(default = "default_initial_rows", validate = "validate_row_or_col")]
     pub initial_rows: u16,
 
+    /// Open new windows at the size, in cells, of the last window you
+    /// resized or closed, instead of initial_cols and initial_rows.
+    #[dynamic(default)]
+    pub remember_window_size: bool,
+
     #[dynamic(default = "default_true")]
     pub enable_kitty_graphics: bool,
     #[dynamic(default)]
@@ -1502,13 +1507,38 @@ impl Config {
         // the GUI has had a chance to update the pixel dimensions
         // when running under X11.
         // This is a bit gross.
+        let (cols, rows) = if self.remember_window_size {
+            crate::remembered_window_size().unwrap_or((self.initial_cols, self.initial_rows))
+        } else {
+            (self.initial_cols, self.initial_rows)
+        };
+        self.size_in_cells(cols, rows, dpi, cell_pixel_dims)
+    }
+
+    /// The size from initial_cols and initial_rows, ignoring
+    /// remember_window_size. Used to reset a window to its default size.
+    pub fn configured_initial_size(
+        &self,
+        dpi: u32,
+        cell_pixel_dims: Option<(usize, usize)>,
+    ) -> TerminalSize {
+        self.size_in_cells(self.initial_cols, self.initial_rows, dpi, cell_pixel_dims)
+    }
+
+    fn size_in_cells(
+        &self,
+        cols: u16,
+        rows: u16,
+        dpi: u32,
+        cell_pixel_dims: Option<(usize, usize)>,
+    ) -> TerminalSize {
         let (cell_pixel_width, cell_pixel_height) = cell_pixel_dims.unwrap_or((8, 16));
 
         TerminalSize {
-            rows: self.initial_rows as usize,
-            cols: self.initial_cols as usize,
-            pixel_width: cell_pixel_width * self.initial_cols as usize,
-            pixel_height: cell_pixel_height * self.initial_rows as usize,
+            rows: rows as usize,
+            cols: cols as usize,
+            pixel_width: cell_pixel_width * cols as usize,
+            pixel_height: cell_pixel_height * rows as usize,
             dpi,
         }
     }

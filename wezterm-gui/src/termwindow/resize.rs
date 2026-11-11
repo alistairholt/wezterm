@@ -54,6 +54,11 @@ impl super::TermWindow {
         if self.dimensions == dimensions && self.window_state == window_state {
             // It didn't really change
             log::trace!("dimensions didn't change NOP!");
+            // The resize that ends a live resize usually repeats the last
+            // step's size; that is when the drag is over.
+            if !live_resizing {
+                self.remember_window_size();
+            }
             return;
         }
         let last_state = self.window_state;
@@ -74,6 +79,28 @@ impl super::TermWindow {
             modal.reconfigure(self);
         }
         self.emit_window_event("window-resized", None);
+        if !live_resizing {
+            self.remember_window_size();
+        }
+    }
+
+    /// Save this window's size in cells for remember_window_size. A
+    /// maximized or full screen size isn't saved: new windows would
+    /// open as big as the screen without being in that state.
+    pub fn remember_window_size(&self) {
+        if !self.config.remember_window_size || !self.window_state.can_resize() {
+            return;
+        }
+        log::debug!(
+            "remember_window_size: window {} is {}x{} cells",
+            self.mux_window_id,
+            self.terminal_size.cols,
+            self.terminal_size.rows
+        );
+        config::set_remembered_window_size(
+            self.terminal_size.cols as u16,
+            self.terminal_size.rows as u16,
+        );
     }
 
     /// Called before painting. If the last live-resize step resized the
@@ -566,7 +593,7 @@ impl super::TermWindow {
     }
 
     pub fn reset_font_and_window_size(&mut self, window: &Window) -> anyhow::Result<()> {
-        let size = self.config.initial_size(
+        let size = self.config.configured_initial_size(
             self.dimensions.dpi as u32,
             Some(crate::cell_pixel_dims(
                 &self.config,
