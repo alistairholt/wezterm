@@ -237,6 +237,10 @@ impl GuiFrontEnd {
         log::trace!("Got app event {event:?}");
         match event {
             ApplicationEvent::OpenCommandScript(file_name) => {
+                // Info.plist lists folders as a document type, so Finder
+                // and `open -a WezTerm DIR` send directories here too.
+                // Open a shell in the folder rather than running it.
+                let is_dir = std::path::Path::new(&file_name).is_dir();
                 let quoted_file_name = match shlex::try_quote(&file_name) {
                     Ok(name) => name.to_owned().to_string(),
                     Err(_) => {
@@ -261,7 +265,7 @@ impl GuiFrontEnd {
                     let window_id = None;
                     let pane_id = None;
                     let cmd = None;
-                    let cwd = None;
+                    let cwd = if is_dir { Some(file_name.clone()) } else { None };
                     let workspace = mux.active_workspace();
 
                     match mux
@@ -279,8 +283,10 @@ impl GuiFrontEnd {
                     {
                         Ok((_tab, pane, _window_id)) => {
                             log::trace!("Spawned {file_name} as pane_id {}", pane.pane_id());
-                            let mut writer = pane.writer();
-                            write!(writer, "{quoted_file_name} ; exit\n").ok();
+                            if !is_dir {
+                                let mut writer = pane.writer();
+                                write!(writer, "{quoted_file_name} ; exit\n").ok();
+                            }
                         }
                         Err(err) => {
                             log::error!("Failed to spawn {file_name}: {err:#?}");
