@@ -122,9 +122,10 @@ impl crate::TermWindow {
         }
     }
 
-    /// With the macOS traffic lights in a Flat or Capsule tab bar, the bar
-    /// is at least twice as tall as the lights' center is from the top of
-    /// the window, so they have equal space above and below them.
+    /// With the macOS traffic lights in the tab bar, the bar is at least
+    /// twice as tall as the lights' center is from the top of the window,
+    /// so they have equal space above and below them. The same for every
+    /// fancy_tab_style, so switching style doesn't change the height.
     fn traffic_light_bar_height(
         config: &ConfigHandle,
         fontconfig: &wezterm_font::FontConfiguration,
@@ -137,10 +138,7 @@ impl crate::TermWindow {
             .contains(::window::WindowDecorations::INTEGRATED_BUTTONS)
             && config.integrated_title_button_style
                 == ::window::IntegratedTitleButtonStyle::MacOsNative;
-        if cfg!(target_os = "macos")
-            && native_buttons
-            && config.fancy_tab_style != config::FancyTabStyle::Default
-        {
+        if cfg!(target_os = "macos") && native_buttons {
             // macOS reports 72 dpi per point of backing scale.
             2. * TRAFFIC_LIGHT_CENTER * fontconfig.get_dpi() as f32 / 72.
         } else {
