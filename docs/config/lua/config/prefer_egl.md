@@ -4,6 +4,12 @@ tags:
 ---
 # `prefer_egl = true`
 
+{{since('nightly', outline=true)}}
+    Ignored on this macOS-only fork, which always renders with Metal and
+    no longer uses EGL or OpenGL. The option is still accepted so that
+    existing configs load. The rest of this page describes upstream
+    wezterm.
+
 Depending on the OS and windowing environment, there are a number of different
 ways to access the GPU.
 

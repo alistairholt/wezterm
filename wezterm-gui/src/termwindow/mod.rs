@@ -37,8 +37,8 @@ use config::keyassignment::{
 };
 use config::window::WindowLevel;
 use config::{
-    configuration, AudibleBell, ConfigHandle, Dimension, DimensionContext, FrontEndSelection,
-    GeometryOrigin, GuiPosition, TermConfig, WindowCloseConfirmation,
+    configuration, AudibleBell, ConfigHandle, Dimension, DimensionContext, GeometryOrigin,
+    GuiPosition, TermConfig, WindowCloseConfirmation,
 };
 use lfucache::*;
 use mlua::{FromLua, LuaSerdeExt, UserData, UserDataFields};
@@ -425,7 +425,7 @@ pub struct TermWindow {
     current_mouse_buttons: Vec<MousePress>,
     current_mouse_capture: Option<MouseCapture>,
 
-    opengl_info: Option<String>,
+    renderer_info: Option<String>,
 
     /// Keeps track of double and triple clicks
     last_mouse_click: Option<LastMouseClick>,
@@ -475,7 +475,6 @@ pub struct TermWindow {
 
     connection_name: String,
 
-    gl: Option<Rc<glium::backend::Context>>,
     webgpu: Option<Rc<WebGpuState>>,
     config_subscription: Option<config::ConfigSubscription>,
 }
@@ -572,12 +571,12 @@ impl TermWindow {
         self.render_state = None;
 
         let render_info = ctx.renderer_info();
-        self.opengl_info.replace(render_info.clone());
+        self.renderer_info.replace(render_info.clone());
 
         match RenderState::new(ctx, &self.fonts, &self.render_metrics, ATLAS_SIZE) {
             Ok(render_state) => {
                 log::debug!(
-                    "OpenGL initialized! {} wezterm version: {}",
+                    "Renderer initialized! {} wezterm version: {}",
                     render_info,
                     config::wezterm_version(),
                 );
@@ -589,7 +588,7 @@ impl TermWindow {
         }
 
         if self.render_state.is_none() {
-            panic!("No OpenGL");
+            panic!("No renderer");
         }
 
         Ok(())
@@ -701,7 +700,6 @@ impl TermWindow {
             fps: 0.,
             config_subscription: None,
             os_parameters: None,
-            gl: None,
             webgpu: None,
             window: None,
             window_background,
@@ -806,7 +804,7 @@ impl TermWindow {
             is_click_to_focus_window: false,
             key_table_state: KeyTableState::default(),
             modal: RefCell::new(None),
-            opengl_info: None,
+            renderer_info: None,
         };
 
         let tw = Rc::new(RefCell::new(myself));
@@ -863,19 +861,11 @@ impl TermWindow {
             }
         });
 
-        let gl = match config.front_end {
-            FrontEndSelection::WebGpu => None,
-            _ => Some(window.enable_opengl().await?),
-        };
-
         {
             let mut myself = tw.borrow_mut();
-            let webgpu = match config.front_end {
-                FrontEndSelection::WebGpu => {
-                    Some(Rc::new(WebGpuState::new(&window, &config).await?))
-                }
-                _ => None,
-            };
+            // front_end is accepted for old configs but ignored: this fork
+            // only renders through wgpu's Metal backend.
+            let webgpu = Rc::new(WebGpuState::new(&window, &config).await?);
             myself.config_subscription.replace(config_subscription);
             if config.use_resize_increments {
                 window.set_resize_increments(
@@ -893,14 +883,8 @@ impl TermWindow {
                 );
             }
 
-            if let Some(gl) = gl {
-                myself.gl.replace(Rc::clone(&gl));
-                myself.created(RenderContext::Glium(Rc::clone(&gl)))?;
-            }
-            if let Some(webgpu) = webgpu {
-                myself.webgpu.replace(Rc::clone(&webgpu));
-                myself.created(RenderContext::WebGpu(Rc::clone(&webgpu)))?;
-            }
+            myself.webgpu.replace(Rc::clone(&webgpu));
+            myself.created(RenderContext::new(webgpu))?;
             myself.load_os_parameters();
             window.show();
             myself.subscribe_to_pane_updates();
@@ -981,11 +965,7 @@ impl TermWindow {
                 self.resizes_pending -= 1;
                 if self.is_repaint_pending {
                     self.is_repaint_pending = false;
-                    if self.webgpu.is_some() {
-                        self.do_paint_webgpu()?;
-                    } else {
-                        self.do_paint(window);
-                    }
+                    self.do_paint();
                 }
                 self.apply_pending_scale_changes();
                 Ok(true)
@@ -1023,11 +1003,8 @@ impl TermWindow {
                     Ok(true)
                 } else {
                     self.wait_for_live_resize_repaint();
-                    if self.webgpu.is_some() {
-                        self.do_paint_webgpu()
-                    } else {
-                        Ok(self.do_paint(window))
-                    }
+                    self.do_paint();
+                    Ok(true)
                 }
             }
             WindowEvent::Notification(item) => {
@@ -1081,35 +1058,10 @@ impl TermWindow {
         }
     }
 
-    fn do_paint(&mut self, window: &Window) -> bool {
-        let gl = match self.gl.as_ref() {
-            Some(gl) => gl,
-            None => return false,
-        };
-
-        if gl.is_context_lost() {
-            log::error!("opengl context was lost; should reinit");
-            window.close();
-            front_end().forget_known_window(window);
-            return false;
-        }
-
-        let mut frame = glium::Frame::new(
-            Rc::clone(&gl),
-            (
-                self.dimensions.pixel_width as u32,
-                self.dimensions.pixel_height as u32,
-            ),
-        );
-        self.paint_impl(&mut RenderFrame::Glium(&mut frame));
-        window.finish_frame(frame).is_ok()
-    }
-
-    fn do_paint_webgpu(&mut self) -> anyhow::Result<bool> {
+    fn do_paint(&mut self) {
         // The drawable is sized from self.dimensions when it is acquired
-        // (call_draw_webgpu), so there is no surface to reconfigure here.
-        self.paint_impl(&mut RenderFrame::WebGpu);
-        Ok(true)
+        // (call_draw), so there is no surface to reconfigure here.
+        self.paint_impl();
     }
 
     fn dispatch_notif(&mut self, notif: TermWindowNotif, window: &Window) -> anyhow::Result<()> {
@@ -2374,11 +2326,15 @@ impl TermWindow {
 
         let gui_win = GuiWin::new(self);
 
-        let opengl_info = self.opengl_info.as_deref().unwrap_or("Unknown").to_string();
+        let renderer_info = self
+            .renderer_info
+            .as_deref()
+            .unwrap_or("Unknown")
+            .to_string();
         let connection_info = self.connection_name.clone();
 
         let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
-            crate::overlay::show_debug_overlay(term, gui_win, opengl_info, connection_info)
+            crate::overlay::show_debug_overlay(term, gui_win, renderer_info, connection_info)
         });
         self.assign_overlay(tab.tab_id(), overlay);
         promise::spawn::spawn(future).detach();

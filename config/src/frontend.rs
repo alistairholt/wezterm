@@ -1,6 +1,9 @@
 use luahelper::impl_lua_conversion_dynamic;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 
+/// The `front_end` config option. This fork always renders with Metal
+/// (WebGpu); OpenGL and Software are only kept so that old configs
+/// still parse, and are ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic, Default)]
 pub enum FrontEndSelection {
     OpenGL,
@@ -61,8 +64,8 @@ impl Default for WebGpuPowerPreference {
 mod test {
     use super::*;
 
-    // The fork renders through Metal (the WebGpu front end) unless the
-    // config asks for something else; OpenGL stays as a fallback.
+    // The fork only renders through Metal (the WebGpu front end); the
+    // default should say so even though the value is ignored.
     #[test]
     fn front_end_defaults_to_webgpu() {
         assert_eq!(FrontEndSelection::default(), FrontEndSelection::WebGpu);
