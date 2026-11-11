@@ -74,6 +74,36 @@ pub fn show_line_prompt_overlay(
     Ok(())
 }
 
+/// Ask for a new title for `tab_id`, starting from its current one,
+/// like kitty's set_tab_title. Leaving it empty goes back to the
+/// automatic title. Escape on an empty line cancels.
+pub fn show_rename_tab_overlay(
+    mut term: TermWizTerminal,
+    tab_id: mux::tab::TabId,
+    current_title: String,
+) -> anyhow::Result<()> {
+    term.no_grab_mouse_in_raw_mode();
+    term.render(&[Change::Text(
+        "Rename this tab. Leave it empty to use the automatic title.\r\n".to_string(),
+    )])?;
+
+    let mut host = PromptHost::new();
+    let mut editor = LineEditor::new(&mut term);
+    editor.set_prompt("Tab title: ");
+    let line = editor.read_line_with_optional_initial_value(&mut host, Some(&current_title))?;
+
+    if let Some(title) = line {
+        promise::spawn::spawn_into_main_thread(async move {
+            if let Some(tab) = mux::Mux::get().get_tab(tab_id) {
+                tab.set_title(title.trim());
+            }
+        })
+        .detach();
+    }
+
+    Ok(())
+}
+
 fn trampoline(name: String, window: GuiWin, pane: MuxPane, line: Option<String>) {
     promise::spawn::spawn(async move {
         config::with_lua_config_on_main_thread(move |lua| do_event(lua, name, window, pane, line))
