@@ -1325,6 +1325,16 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Shell"],
             icon: Some("md_rename_box"),
         },
+        UndoCloseTab => CommandDef {
+            brief: "Undo Close Tab".into(),
+            doc: "Brings back the most recently closed tab, if it was \
+              closed less than undo_close_tab_seconds ago."
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["Shell"],
+            icon: Some("md_tab_plus"),
+        },
         CloseOtherTabs { confirm: true } => CommandDef {
             brief: "Close Other Tabs".into(),
             doc: "Closes every tab in this window except the current one, \
@@ -2327,6 +2337,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         }),
         CloseCurrentTab { confirm: true },
         CloseOtherTabs { confirm: true },
+        UndoCloseTab,
         RenameTab,
         CloseCurrentPane { confirm: true },
         CloseOtherPanes { confirm: true },

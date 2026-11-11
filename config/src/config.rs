@@ -132,6 +132,12 @@ pub struct Config {
     #[dynamic(default)]
     pub switch_to_last_active_tab_when_closing_tab: bool,
 
+    /// How long, in seconds, a closed tab is kept so UndoCloseTab can
+    /// bring it back, as in iTerm2. Its programs keep running until then.
+    /// 0 closes tabs at once.
+    #[dynamic(default = "default_undo_close_tab_seconds")]
+    pub undo_close_tab_seconds: u64,
+
     /// When true, launching a new wezterm instance will prefer
     /// to spawn a new tab into an existing instance.
     /// Otherwise, it will spawn a new window.
@@ -1861,6 +1867,10 @@ fn default_anim_fps() -> u8 {
 /// Painting on macOS follows the display link, which never runs faster
 /// than the display, so 120 allows ProMotion rates without changing
 /// anything on 60Hz displays.
+fn default_undo_close_tab_seconds() -> u64 {
+    5
+}
+
 fn default_max_fps() -> u64 {
     120
 }

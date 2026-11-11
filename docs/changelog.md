@@ -180,6 +180,11 @@ As features stabilize some brief notes about them will accumulate here.
 * [ShowLastCommandOutputInPager](config/lua/keyassignment/ShowLastCommandOutputInPager.md)
   opens the last command's output in a pager in a new tab, as kitty's
   `show_last_non_empty_command_output` does. Needs shell integration.
+* [UndoCloseTab](config/lua/keyassignment/UndoCloseTab.md) brings back a
+  tab closed in the last
+  [undo_close_tab_seconds](config/lua/config/undo_close_tab_seconds.md)
+  (5 by default), as iTerm2 does. A closed tab's programs now keep
+  running until that time is up.
 * [RenameTab](config/lua/keyassignment/RenameTab.md) asks for a new tab
   title without needing a Lua callback, like kitty's `set_tab_title`.
 * [MovePaneToTab](config/lua/keyassignment/MovePaneToTab.md) moves the
