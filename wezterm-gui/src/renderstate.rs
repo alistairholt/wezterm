@@ -47,6 +47,27 @@ pub struct MappedQuads<'a> {
     capacity: usize,
 }
 
+impl<'a> MappedQuads<'a> {
+    /// Writes cached quads straight into the mapped buffer, without
+    /// building each quad's vertices on the stack and copying them in.
+    pub fn extend_with_quads(&mut self, quads: &[BoxedQuad]) {
+        let idx = *self.next;
+        *self.next += quads.len();
+        // As in extend_with: only copy in if there is enough room, and
+        // let the end of the render pass detect running out of space.
+        if idx + quads.len() <= self.capacity {
+            let start = idx * VERTICES_PER_CELL;
+            let end = start + quads.len() * VERTICES_PER_CELL;
+            for (quad, out) in quads
+                .iter()
+                .zip(self.mapping.mapping[start..end].chunks_exact_mut(VERTICES_PER_CELL))
+            {
+                quad.write_vertices(out);
+            }
+        }
+    }
+}
+
 pub struct WebGpuMappedVertexBuffer {
     mapping: &'static mut [Vertex],
     // Owner of the vertices, must be dropped after mapping
@@ -406,6 +427,10 @@ impl TripleLayerQuadAllocatorTrait for BorrowedLayers {
 
     fn extend_with(&mut self, layer_num: usize, vertices: &[Vertex]) {
         self.layers[layer_num].extend_with(vertices)
+    }
+
+    fn extend_with_quads(&mut self, layer_num: usize, quads: &[BoxedQuad]) {
+        self.layers[layer_num].extend_with_quads(quads)
     }
 }
 
