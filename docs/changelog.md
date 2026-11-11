@@ -318,6 +318,9 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* Making the window wider moved a cursor at the start of a line (for
+  example, a fresh prompt line) to the end of the line above. It now
+  stays put.
 * Pasted text could end bracketed paste early by nesting its end marker
   (`ESC[201\ESC[201~~`), so the rest of the paste ran as if typed. All
   bracketed paste markers are now removed from pasted text.

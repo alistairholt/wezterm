@@ -1027,6 +1027,33 @@ fn test_resize_wrap() {
     );
 }
 
+/// A cursor in column zero of an unwrapped line, such as a fresh
+/// prompt line after output, must stay where it is when the width
+/// changes. Only a cursor that lands in column zero because its line
+/// was rewrapped should move back to the end of the prior row.
+#[test]
+fn test_resize_keeps_column_zero_cursor() {
+    const LINES: usize = 4;
+    let mut term = TestTerm::new(LINES, 4, 0);
+    term.print("ab\r\ncd\r\n");
+    term.assert_cursor_pos(0, 2, Some("before resize"), None);
+
+    term.resize(TerminalSize {
+        rows: LINES,
+        cols: 8,
+        ..Default::default()
+    });
+    assert_visible_contents(&term, file!(), line!(), &["ab", "cd", "", ""]);
+    term.assert_cursor_pos(0, 2, Some("after widening"), None);
+
+    term.resize(TerminalSize {
+        rows: LINES,
+        cols: 3,
+        ..Default::default()
+    });
+    term.assert_cursor_pos(0, 2, Some("after narrowing"), None);
+}
+
 #[test]
 fn test_resize_wrap_issue_971() {
     const LINES: usize = 4;
