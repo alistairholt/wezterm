@@ -222,6 +222,13 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* Kitty keyboard protocol: with "report all keys as escape codes" (flag 8)
+  enabled, text keys were still sent as plain text, and Ctrl+letter as a
+  control character. They are now sent as `CSI ... u` sequences. #4003
+* macOS: Ctrl+Shift with `,` `.` `/` `=` `` ` `` or a digit was sent
+  without its modifiers, so kitty keyboard apps saw a bare `,` for
+  Ctrl+Shift+,. The shifted key and both modifiers are now sent, as kitty
+  and xterm do. #6994
 * Multiplexer: the mouse wheel was not mapped to cursor up/down keys in the
   alternate screen for panes in a `wezterm connect` domain, because the client
   always reported the alternate screen as inactive. The server now advises the

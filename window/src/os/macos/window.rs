@@ -174,6 +174,37 @@ fn frame_rate_range(max_fps: u64) -> CAFrameRateRange {
     }
 }
 
+/// With Ctrl+Shift held, macOS reports some keys with `characters` set
+/// to the unshifted character and `charactersIgnoringModifiers` set to
+/// the shifted one: Ctrl+Shift+, gives chars="," and unmod="<". The same
+/// goes for `.`, `/`, `=`, `` ` `` and the digits on a US layout. Taking
+/// `chars` would lose the shift, and because chars and unmod differ the
+/// key would then be sent with no modifiers at all, so a kitty keyboard
+/// app saw a bare ",". Returns true when the key should come from
+/// `unmod` with its modifiers kept.
+/// <https://github.com/wezterm/wezterm/issues/6994>
+/// <https://github.com/wezterm/wezterm/issues/1907>
+fn ctrl_shift_dropped_shift(modifiers: Modifiers, chars: &str, unmod: &str) -> bool {
+    if !modifiers.contains(Modifiers::CTRL | Modifiers::SHIFT)
+        || modifiers.intersects(Modifiers::ALT | Modifiers::SUPER)
+    {
+        return false;
+    }
+    let single = |s: &str| {
+        let mut iter = s.chars();
+        match (iter.next(), iter.next()) {
+            (Some(c), None) => Some(c),
+            _ => None,
+        }
+    };
+    match (single(chars), single(unmod)) {
+        (Some(c), Some(u)) => {
+            c != u && c.is_ascii_graphic() && u.is_ascii_punctuation() && !c.is_ascii_alphabetic()
+        }
+        _ => false,
+    }
+}
+
 impl NSRange {
     fn new(location: u64, length: u64) -> Self {
         Self(cocoa::foundation::NSRange { location, length })
@@ -2633,10 +2664,7 @@ impl WindowView {
         // <https://github.com/wezterm/wezterm/issues/760>
         let swap_unmod_and_chars = (modifiers.contains(Modifiers::SHIFT | Modifiers::ALT)
             && virtual_key == kVK_ANSI_Grave)
-            ||
-            // <https://github.com/wezterm/wezterm/issues/1907>
-            (modifiers.contains(Modifiers::SHIFT | Modifiers::CTRL)
-                && virtual_key == kVK_ANSI_Slash);
+            || ctrl_shift_dropped_shift(modifiers, chars, unmod);
 
         if let Some(key) = key_string_to_key_code(chars).or_else(|| key_string_to_key_code(unmod)) {
             let (key, raw_key) = if prefer_vkey {
@@ -3552,5 +3580,41 @@ mod test {
         );
         assert_eq!(frame_rate_range(0).maximum, 1.);
         assert_eq!(frame_rate_range(5000).maximum, 1000.);
+    }
+
+    /// The chars/unmod pairs here are what macOS 26 reports for a US
+    /// layout (captured with NSEvent(cgEvent:)). Keys where Ctrl+Shift
+    /// loses the shift take the shifted key from unmod; control
+    /// characters, letters and keys that already agree are left alone.
+    #[test]
+    fn ctrl_shift_takes_shifted_key_from_unmod() {
+        let cs = Modifiers::CTRL | Modifiers::SHIFT;
+        for (chars, unmod) in [
+            (",", "<"),
+            (".", ">"),
+            ("/", "?"),
+            ("=", "+"),
+            ("`", "~"),
+            ("1", "!"),
+        ] {
+            assert!(
+                ctrl_shift_dropped_shift(cs, chars, unmod),
+                "{chars} {unmod}"
+            );
+        }
+        // Control characters are handled by the existing CTRL-A logic.
+        for (chars, unmod) in [("\x01", "A"), ("\x1f", "_"), ("\x1b", "{"), ("\0", "@")] {
+            assert!(
+                !ctrl_shift_dropped_shift(cs, chars, unmod),
+                "{chars:?} {unmod}"
+            );
+        }
+        // Already consistent.
+        assert!(!ctrl_shift_dropped_shift(cs, ":", ":"));
+        // Only Ctrl+Shift, without Alt or Cmd.
+        assert!(!ctrl_shift_dropped_shift(Modifiers::CTRL, ",", "<"));
+        assert!(!ctrl_shift_dropped_shift(Modifiers::SHIFT, ",", "<"));
+        assert!(!ctrl_shift_dropped_shift(cs | Modifiers::ALT, ",", "<"));
+        assert!(!ctrl_shift_dropped_shift(cs | Modifiers::SUPER, ",", "<"));
     }
 }

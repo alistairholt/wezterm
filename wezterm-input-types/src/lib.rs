@@ -1816,7 +1816,11 @@ impl KeyEvent {
                     *shifted_key
                 };
 
+                // With REPORT_ALL_KEYS_AS_ESCAPE_CODES, text keys are
+                // reported as CSI u too, even with modifiers.
+                // <https://github.com/wezterm/wezterm/issues/4003>
                 let use_legacy = !flags.contains(KittyKeyboardFlags::REPORT_ALTERNATE_KEYS)
+                    && !flags.contains(KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
                     && event_type.is_empty()
                     && is_legacy_key
                     && !(flags.contains(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
@@ -2227,6 +2231,53 @@ impl Default for UIKeyCapRendering {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    /// With "report all keys as escape codes" (flag 8), text keys must be
+    /// sent as CSI u sequences, not as the text they type, with or
+    /// without modifiers. <https://github.com/wezterm/wezterm/issues/4003>
+    #[test]
+    fn encode_issue_4003_report_all_keys() {
+        let key = |key, modifiers| KeyEvent {
+            key,
+            modifiers,
+            leds: KeyboardLedStatus::empty(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: None,
+        };
+        let all = KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+        let text = all | KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT;
+
+        assert_eq!(
+            key(KeyCode::Char('j'), Modifiers::NONE).encode_kitty(all),
+            "\x1b[106;1u"
+        );
+        // Shifted keys report the unshifted key code plus the shift bit.
+        assert_eq!(
+            key(KeyCode::Char('J'), Modifiers::SHIFT).encode_kitty(all),
+            "\x1b[106;2u"
+        );
+        // Ctrl must not fall back to the legacy control character.
+        assert_eq!(
+            key(KeyCode::Char('a'), Modifiers::CTRL).encode_kitty(all),
+            "\x1b[97;5u"
+        );
+        assert_eq!(
+            key(KeyCode::Char('A'), Modifiers::SHIFT).encode_kitty(text),
+            "\x1b[97;2;65u"
+        );
+
+        // Without flag 8, plain text keys still send their text.
+        let disambiguate = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES;
+        assert_eq!(
+            key(KeyCode::Char('j'), Modifiers::NONE).encode_kitty(disambiguate),
+            "j"
+        );
+        assert_eq!(
+            key(KeyCode::Char('J'), Modifiers::SHIFT).encode_kitty(disambiguate),
+            "J"
+        );
+    }
 
     #[test]
     fn encode_issue_3220() {
