@@ -32,3 +32,6 @@ config.notify_on_command_finish_after_secs = 30
 The notification goes through the same system as
 [notification_handling](notification_handling.md), so macOS must allow
 WezTerm to show notifications.
+
+To be told about just one command, use
+[NotifyWhenCommandFinishes](../keyassignment/NotifyWhenCommandFinishes.md).

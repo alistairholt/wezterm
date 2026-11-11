@@ -836,6 +836,17 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Edit"],
             icon: Some("md_text_search"),
         },
+        NotifyWhenCommandFinishes => CommandDef {
+            brief: "Notify when command finishes".into(),
+            doc: "Shows a notification once, when the command running in \
+              the current pane finishes, or the next one if none is \
+              running. Run it again to cancel. Needs shell integration."
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Shell"],
+            icon: Some("md_bell_ring"),
+        },
         CopyLastCommandOutput => CommandDef {
             brief: "Copy output of last command".into(),
             doc: "Copies the output of the last command that printed \
@@ -2130,6 +2141,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         SpawnTab(SpawnTabDomain::CurrentPaneDomain),
         SpawnWindow,
         ToggleBroadcastInput,
+        NotifyWhenCommandFinishes,
         SplitVertical(SpawnCommand {
             domain: SpawnTabDomain::CurrentPaneDomain,
             ..Default::default()
