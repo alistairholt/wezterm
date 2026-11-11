@@ -212,6 +212,8 @@ pub struct PaneState {
     /// Set by NotifyWhenCommandFinishes: notify once when the running
     /// command (or the next one) finishes, whatever the config says.
     notify_on_next_finish: bool,
+    /// Set by FindCursor: when the crosshair over the cursor started.
+    find_cursor_start: Option<Instant>,
     pub mouse_terminal_coords: Option<(ClickPosition, StableRowIndex)>,
 }
 
@@ -2970,6 +2972,14 @@ impl TermWindow {
                 }
                 Err(err) => log::error!("CopyLastCommandOutput: {err:#}"),
             },
+            FindCursor => {
+                // The cursor is at the bottom of the scrollback, so bring
+                // it on screen before drawing the crosshair over it.
+                let dims = pane.get_dimensions();
+                self.set_viewport(pane.pane_id(), None, dims);
+                self.pane_state(pane.pane_id()).find_cursor_start = Some(Instant::now());
+                self.window.as_ref().unwrap().invalidate();
+            }
             SelectLastCommandOutput => match last_command_output_zone(pane) {
                 Ok((zone, lines)) => self.select_command_output(pane, &zone, &lines),
                 Err(err) => log::error!("SelectLastCommandOutput: {err:#}"),

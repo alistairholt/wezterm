@@ -167,6 +167,9 @@ As features stabilize some brief notes about them will accumulate here.
 * [macos_dock_badge_on_bell](config/lua/config/macos_dock_badge_on_bell.md)
   badges the Dock icon with the number of tabs that have a bell you
   haven't seen, as Terminal.app does. On by default.
+* [FindCursor](config/lua/keyassignment/FindCursor.md), bound to `CMD-/`,
+  briefly draws a crosshair through the cursor, as iTerm2's "Find
+  Cursor" does.
 * [SelectLastCommandOutput](config/lua/keyassignment/SelectLastCommandOutput.md),
   bound to `CMD-SHIFT-a`, selects the last command's output and scrolls
   to it, as iTerm2's "Select Output of Last Command" does. Needs shell
