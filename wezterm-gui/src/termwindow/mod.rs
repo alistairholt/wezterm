@@ -2877,6 +2877,11 @@ impl TermWindow {
                     log::error!("ShowScrollbackInPager: {err:#}");
                 }
             }
+            ShowLastCommandOutputInPager => {
+                if let Err(err) = self.show_last_command_output_in_pager(pane) {
+                    log::error!("ShowLastCommandOutputInPager: {err:#}");
+                }
+            }
             HideApplication => {
                 let con = Connection::get().expect("call on gui thread");
                 con.hide_application();
@@ -3797,6 +3802,39 @@ impl TermWindow {
     /// it with `scrollback_pager` in a new tab, as the pager's standard
     /// input. The file is removed as soon as the pager has it open.
     fn show_scrollback_in_pager(&mut self, pane: &Arc<dyn Pane>) -> anyhow::Result<()> {
+        let dims = pane.get_dimensions();
+        let end = dims.physical_top + dims.viewport_rows as StableRowIndex;
+        let (_first, lines) = pane.get_lines(dims.scrollback_top..end);
+        self.show_lines_in_pager(pane, lines)
+    }
+
+    /// Like kitty's show_last_non_empty_command_output: open the output
+    /// of the last command that printed something. The shell
+    /// integration marks command output with OSC 133, which the
+    /// terminal keeps as Output semantic zones.
+    fn show_last_command_output_in_pager(&mut self, pane: &Arc<dyn Pane>) -> anyhow::Result<()> {
+        let zones = pane.get_semantic_zones()?;
+        for zone in zones.iter().rev() {
+            if zone.semantic_type != wezterm_term::SemanticType::Output {
+                continue;
+            }
+            let (_first, lines) = pane.get_lines(zone.start_y..zone.end_y + 1);
+            if lines.iter().all(|line| line.as_str().trim().is_empty()) {
+                continue;
+            }
+            return self.show_lines_in_pager(pane, lines);
+        }
+        anyhow::bail!(
+            "no command output found in pane {}; is shell integration set up?",
+            pane.pane_id()
+        )
+    }
+
+    fn show_lines_in_pager(
+        &mut self,
+        pane: &Arc<dyn Pane>,
+        mut lines: Vec<wezterm_term::Line>,
+    ) -> anyhow::Result<()> {
         use std::io::Write;
 
         anyhow::ensure!(
@@ -3804,9 +3842,6 @@ impl TermWindow {
             "scrollback_pager is empty"
         );
 
-        let dims = pane.get_dimensions();
-        let end = dims.physical_top + dims.viewport_rows as StableRowIndex;
-        let (_first, mut lines) = pane.get_lines(dims.scrollback_top..end);
         // Blank rows below the cursor would leave the pager showing
         // empty space at the end.
         while lines
