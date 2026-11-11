@@ -1297,6 +1297,24 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &[],
             icon: Some("md_close_box_multiple_outline"),
         },
+        CloseOtherPanes { confirm: true } => CommandDef {
+            brief: "Close Other Panes".into(),
+            doc: "Closes every pane in this tab except the current one, \
+                  asking first if any of them are running a program"
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Shell"],
+            icon: Some("md_close_box_multiple_outline"),
+        },
+        CloseOtherPanes { confirm: false } => CommandDef {
+            brief: "Close Other Panes".into(),
+            doc: "Closes every pane in this tab except the current one".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &[],
+            icon: Some("md_close_box_multiple_outline"),
+        },
         CloseCurrentPane { confirm: true } => CommandDef {
             brief: "Close current Pane".into(),
             doc: "Closes the current pane, terminating the \
@@ -2257,6 +2275,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         CloseOtherTabs { confirm: true },
         RenameTab,
         CloseCurrentPane { confirm: true },
+        CloseOtherPanes { confirm: true },
         DetachDomain(SpawnTabDomain::CurrentPaneDomain),
         ResetTerminal,
         // ----------------- Edit
