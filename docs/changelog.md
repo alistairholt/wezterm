@@ -249,7 +249,9 @@ As features stabilize some brief notes about them will accumulate here.
 #### Fixed
 * Opening a folder with WezTerm, by dropping it on the Dock icon or with
   `open -a WezTerm DIR`, now opens a window with a shell in that folder.
-  Before, it typed the folder's path into a new shell as a command.
+  Before, it typed the folder's path into a new shell as a command. A
+  folder or script opened while WezTerm isn't running is no longer
+  ignored; it opens in its own window next to the startup window.
 * Opening a shell script with WezTerm from Finder now runs it with your
   login shell (`-l -i -c`). Before, the command was typed into a new
   shell, and shells that drop input typed before their first prompt never

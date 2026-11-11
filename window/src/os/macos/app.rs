@@ -68,10 +68,25 @@ extern "C" fn application_will_finish_launching(
     log::debug!("application_will_finish_launching");
 }
 
+thread_local! {
+    /// Files and folders macOS asked us to open before launching
+    /// finished, for example a folder dropped on the Dock icon while
+    /// WezTerm wasn't running. They are opened once launching is done.
+    static PENDING_OPEN_FILES: std::cell::RefCell<Vec<String>> =
+        std::cell::RefCell::new(vec![]);
+}
+
 extern "C" fn application_did_finish_launching(this: &mut Object, _sel: Sel, _notif: *mut Object) {
     log::debug!("application_did_finish_launching");
     unsafe {
         (*this).set_ivar("launched", YES);
+    }
+    let pending = PENDING_OPEN_FILES.with(|files| std::mem::take(&mut *files.borrow_mut()));
+    if let Some(conn) = Connection::get() {
+        for file_name in pending {
+            log::debug!("opening {file_name}, which arrived before launch finished");
+            conn.dispatch_app_event(ApplicationEvent::OpenCommandScript(file_name));
+        }
     }
 }
 
@@ -119,12 +134,14 @@ extern "C" fn application_open_file(
     file_name: *mut Object,
 ) {
     let launched: BOOL = unsafe { *this.get_ivar("launched") };
+    let file_name = unsafe { nsstring_to_str(file_name) }.to_string();
+    log::debug!("application_open_file {file_name} launched={launched}");
     if launched == YES {
-        let file_name = unsafe { nsstring_to_str(file_name) }.to_string();
         if let Some(conn) = Connection::get() {
-            log::debug!("application_open_file {file_name}");
             conn.dispatch_app_event(ApplicationEvent::OpenCommandScript(file_name));
         }
+    } else {
+        PENDING_OPEN_FILES.with(|files| files.borrow_mut().push(file_name));
     }
 }
 
