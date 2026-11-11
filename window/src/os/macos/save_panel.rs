@@ -5,6 +5,7 @@ use block::ConcreteBlock;
 use cocoa::appkit::NSApp;
 use cocoa::base::{id, nil};
 use cocoa::foundation::NSInteger;
+use objc::rc::StrongPtr;
 use objc::*;
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -22,12 +23,14 @@ const NS_MODAL_RESPONSE_OK: NSInteger = 1;
 /// only.
 pub fn choose_save_path(default_name: &str, done: impl FnOnce(Option<PathBuf>) + 'static) {
     unsafe {
-        let panel: id = msg_send![class!(NSSavePanel), savePanel];
+        // savePanel is autoreleased; keep our own reference until the
+        // completion handler is done with it.
+        let panel = StrongPtr::retain(msg_send![class!(NSSavePanel), savePanel]);
         let name = nsstring(default_name);
-        let _: () = msg_send![panel, setNameFieldStringValue: *name];
-        let _: () = msg_send![panel, setCanCreateDirectories: true];
+        let _: () = msg_send![*panel, setNameFieldStringValue: *name];
+        let _: () = msg_send![*panel, setCanCreateDirectories: true];
 
-        let panel_ptr = panel;
+        let panel_ptr = panel.clone();
         // The block must be Fn; it runs once, so take `done` out.
         let done = RefCell::new(Some(done));
         let handler = ConcreteBlock::new(move |response: NSInteger| {
@@ -38,7 +41,7 @@ pub fn choose_save_path(default_name: &str, done: impl FnOnce(Option<PathBuf>) +
                 done(None);
                 return;
             }
-            let url: id = msg_send![panel_ptr, URL];
+            let url: id = msg_send![*panel_ptr, URL];
             if url == nil {
                 done(None);
                 return;
@@ -48,13 +51,22 @@ pub fn choose_save_path(default_name: &str, done: impl FnOnce(Option<PathBuf>) +
         });
         let handler = handler.copy();
 
-        let window: id = msg_send![NSApp(), keyWindow];
+        // The key window can be nil for a moment, for example right
+        // after the app was brought to the front.
+        let mut window: id = msg_send![NSApp(), keyWindow];
         if window == nil {
-            let response: NSInteger = msg_send![panel, runModal];
+            window = msg_send![NSApp(), mainWindow];
+        }
+        if window == nil {
+            let ordered: id = msg_send![NSApp(), orderedWindows];
+            window = msg_send![ordered, firstObject];
+        }
+        if window == nil {
+            let response: NSInteger = msg_send![*panel, runModal];
             (*handler).call((response,));
         } else {
             let _: () =
-                msg_send![panel, beginSheetModalForWindow: window completionHandler: &*handler];
+                msg_send![*panel, beginSheetModalForWindow: window completionHandler: &*handler];
         }
     }
 }

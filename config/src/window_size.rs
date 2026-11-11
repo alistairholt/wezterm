@@ -1,4 +1,4 @@
-//! The size, in cells, of the last window you resized or closed, saved
+//! The size, in cells, of the last window you resized, saved
 //! so that `remember_window_size` can open new windows at that size.
 
 use crate::DATA_DIR;

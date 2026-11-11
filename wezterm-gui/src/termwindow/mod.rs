@@ -3768,7 +3768,6 @@ impl Drop for TermWindow {
         self.mux_subscription_dead.store(true, Ordering::Relaxed);
         self.clear_all_overlays();
         set_unseen_bell_count(self.mux_window_id, 0);
-        self.remember_window_size();
         if let Some(window) = self.window.take() {
             if let Some(fe) = try_front_end() {
                 fe.forget_known_window(&window);
@@ -3827,10 +3826,6 @@ impl TermWindow {
         }
     }
 
-    /// Write the pane's scrollback and screen, with escape sequences
-    /// for colors and attributes, to a private temporary file and open
-    /// it with `scrollback_pager` in a new tab, as the pager's standard
-    /// input. The file is removed as soon as the pager has it open.
     /// Like iTerm2's View > Use Transparency: make a translucent window
     /// opaque by overriding window_background_opacity for this window,
     /// and remove that override to make it translucent again.
@@ -3899,6 +3894,10 @@ impl TermWindow {
         .detach();
     }
 
+    /// Write the pane's scrollback and screen, with escape sequences
+    /// for colors and attributes, to a private temporary file and open
+    /// it with `scrollback_pager` in a new tab, as the pager's standard
+    /// input. The file is removed as soon as the pager has it open.
     fn show_scrollback_in_pager(&mut self, pane: &Arc<dyn Pane>) -> anyhow::Result<()> {
         let dims = pane.get_dimensions();
         let end = dims.physical_top + dims.viewport_rows as StableRowIndex;

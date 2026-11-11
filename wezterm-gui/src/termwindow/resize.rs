@@ -87,6 +87,11 @@ impl super::TermWindow {
     /// Save this window's size in cells for remember_window_size. A
     /// maximized or full screen size isn't saved: new windows would
     /// open as big as the screen without being in that state.
+    ///
+    /// Only call this after a resize of the window itself. When the tab
+    /// bar appears or goes away the terminal gains or loses rows while
+    /// the window keeps its size; saving then would make each new
+    /// window a row smaller or bigger than the last.
     pub fn remember_window_size(&self) {
         if !self.config.remember_window_size || !self.window_state.can_resize() {
             return;

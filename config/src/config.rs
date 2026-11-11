@@ -258,7 +258,7 @@ pub struct Config {
     pub initial_rows: u16,
 
     /// Open new windows at the size, in cells, of the last window you
-    /// resized or closed, instead of initial_cols and initial_rows.
+    /// resized, instead of initial_cols and initial_rows.
     #[dynamic(default)]
     pub remember_window_size: bool,
 
