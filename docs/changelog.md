@@ -47,6 +47,9 @@ As features stabilize some brief notes about them will accumulate here.
 * The GUI's least-frequently-used caches no longer re-sort an entry on
   every hit; entries are re-sorted only when the cache needs to evict one.
   This saves about 6ms of main thread CPU per second while output scrolls.
+* Working out whether a cell should be drawn as an emoji now skips the
+  emoji tables for plain ASCII cells, saving about 10ms of main thread CPU
+  per second when a full-screen program redraws.
 * macOS: painting is paced by the window's display link instead of a
   [max_fps](config/lua/config/max_fps.md) timer. Frames now follow the
   display's refresh, up to `max_fps`, which now defaults to `120` (was
