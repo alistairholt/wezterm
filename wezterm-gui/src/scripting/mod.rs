@@ -81,7 +81,7 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
     window_mod.set(
         "enumerate_gpus",
         lua.create_function(|_, _: ()| {
-            let backends = wgpu::Backends::all();
+            let backends = wgpu::Backends::METAL;
             let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
                 backends,
                 ..Default::default()
