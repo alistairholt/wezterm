@@ -7,7 +7,7 @@ tags:
 {{since('nightly')}}
 
 When `true`, new windows open at the size, in rows and columns, of the
-last window you resized or closed, instead of
+last window you resized, instead of
 [initial_cols](initial_cols.md) and [initial_rows](initial_rows.md).
 This matches kitty's `remember_window_size`.
 

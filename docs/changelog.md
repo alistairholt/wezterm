@@ -162,8 +162,8 @@ As features stabilize some brief notes about them will accumulate here.
   notifies you once when the current command finishes, as iTerm2's
   "Alert on Next Mark" does. Needs shell integration.
 * [remember_window_size](config/lua/config/remember_window_size.md)
-  opens new windows at the size of the last window you resized or
-  closed, as kitty does. Off by default.
+  opens new windows at the size of the last window you resized, as
+  kitty does. Off by default.
 * [macos_dock_badge_on_bell](config/lua/config/macos_dock_badge_on_bell.md)
   badges the Dock icon with the number of tabs that have a bell you
   haven't seen, as Terminal.app does. On by default.
