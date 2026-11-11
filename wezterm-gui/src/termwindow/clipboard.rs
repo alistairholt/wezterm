@@ -11,13 +11,17 @@ impl TermWindow {
     /// Paste `text` into `pane`, and into any panes Broadcast Input
     /// copies it to. A program that hasn't turned on bracketed paste
     /// runs each pasted line as soon as it arrives, so when the text
-    /// has a line break, ask first (`confirm_multiline_paste`).
+    /// has a line break, ask first (`confirm_multiline_paste`). Also
+    /// ask before a paste larger than `confirm_large_paste_bytes`.
     pub fn paste_with_confirmation(&mut self, pane: &Arc<dyn Pane>, text: String) {
         let pane_id = pane.pane_id();
-        let needs_confirmation = self.config.confirm_multiline_paste
+        let in_overlay = self.pane_state(pane_id).overlay.is_some();
+        let risky_multiline = self.config.confirm_multiline_paste
             && text.contains(['\n', '\r'])
-            && !pane.bracketed_paste_enabled()
-            && self.pane_state(pane_id).overlay.is_none();
+            && !pane.bracketed_paste_enabled();
+        let large_limit = self.config.confirm_large_paste_bytes;
+        let large = large_limit > 0 && text.len() > large_limit;
+        let needs_confirmation = !in_overlay && (risky_multiline || large);
 
         if !needs_confirmation {
             pane.send_paste(&text).ok();
@@ -28,11 +32,19 @@ impl TermWindow {
         }
 
         let lines = text.lines().count().max(1);
-        let message = format!(
-            "📋 Paste {lines} line{}? The program in this pane hasn't turned \
-             on bracketed paste, so each line will run as soon as it arrives.",
-            if lines == 1 { "" } else { "s" }
-        );
+        let plural = if lines == 1 { "" } else { "s" };
+        let message = if risky_multiline {
+            format!(
+                "📋 Paste {lines} line{plural}? The program in this pane hasn't turned \
+                 on bracketed paste, so each line will run as soon as it arrives."
+            )
+        } else {
+            format!(
+                "📋 Paste {} ({lines} line{plural})? That is more than \
+                 confirm_large_paste_bytes.",
+                format_bytes(text.len())
+            )
+        };
         let window = self.window.clone().unwrap();
         let (overlay, future) = start_overlay_pane(self, pane, move |pane_id, mut term| {
             let confirmed = confirm::run_confirmation(&message, &mut term)?;
@@ -102,5 +114,28 @@ impl TermWindow {
         })
         .detach();
         self.maybe_scroll_to_bottom_for_input(&pane);
+    }
+}
+
+/// A byte count for people: "512 bytes", "16.0 KB", "2.5 MB".
+fn format_bytes(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{bytes} bytes")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::format_bytes;
+
+    #[test]
+    fn byte_counts() {
+        assert_eq!(format_bytes(512), "512 bytes");
+        assert_eq!(format_bytes(16 * 1024), "16.0 KB");
+        assert_eq!(format_bytes(5 * 1024 * 1024 / 2), "2.5 MB");
     }
 }
