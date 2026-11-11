@@ -66,7 +66,11 @@ where
         let rx_msg = item_rx.recv();
         let wait_for_read = stream.readable().map(|_| Ok(Item::Readable));
 
-        match smol::future::or(rx_msg, wait_for_read).await {
+        // Check for a request from the client before taking the next
+        // queued item. `or` polls its first future first, and while a pane
+        // floods output there is always a push queued, so with the queue
+        // first a request (a resize, `wezterm cli list`) was never read.
+        match smol::future::or(wait_for_read, rx_msg).await {
             Ok(Item::Readable) => {
                 let decoded = match Pdu::decode_async(&mut stream, None).await {
                     Ok(data) => data,

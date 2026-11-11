@@ -51,6 +51,10 @@ pub(crate) struct PerPane {
     /// Number of resizes of this pane that are waiting for it to redraw
     /// before replying. Pushes are held back while this is non-zero.
     resize_repaint_waits: usize,
+    /// A push task for this pane is queued on the main thread and hasn't
+    /// started yet. Output that arrives meanwhile is covered by that push,
+    /// so no second task is queued.
+    push_scheduled: bool,
 }
 
 /// Counts a resize wait in `PerPane::resize_repaint_waits` while alive.
@@ -334,6 +338,18 @@ fn maybe_push_pane_changes(
     Ok(())
 }
 
+/// Note that a push for this pane is queued. Returns false if one already
+/// was, in which case the caller must not queue another.
+fn mark_push_scheduled(per_pane: &Arc<Mutex<PerPane>>) -> bool {
+    let mut per_pane = per_pane.lock().unwrap();
+    if per_pane.push_scheduled {
+        false
+    } else {
+        per_pane.push_scheduled = true;
+        true
+    }
+}
+
 pub struct SessionHandler {
     to_write_tx: PduSender,
     per_pane: HashMap<TabId, Arc<Mutex<PerPane>>>,
@@ -371,7 +387,16 @@ impl SessionHandler {
     pub fn schedule_pane_push(&mut self, pane_id: PaneId) {
         let sender = self.to_write_tx.clone();
         let per_pane = self.per_pane(pane_id);
+        // A pane that floods output notifies far faster than a push can be
+        // computed and sent. Queuing a task per notification let the main
+        // thread's queue grow without bound, starving every other request.
+        if !mark_push_scheduled(&per_pane) {
+            return;
+        }
         spawn_into_main_thread(async move {
+            // Clear the flag before computing, so that output arriving
+            // while this push runs queues the next one.
+            per_pane.lock().unwrap().push_scheduled = false;
             let mux = Mux::get();
             let pane = mux
                 .get_pane(pane_id)
@@ -1317,6 +1342,20 @@ mod test {
         });
         assert_eq!(stopped, ResizeRepaintStop::Budget);
         assert_eq!(ticks.load(std::sync::atomic::Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn only_one_push_is_queued_per_pane() {
+        // A flooding pane notifies many times before its push task runs.
+        // Only the first notification may queue a task; the rest are
+        // covered by it. Once the task starts, the next output queues
+        // a new one.
+        let per_pane = Arc::new(Mutex::new(PerPane::default()));
+        assert!(mark_push_scheduled(&per_pane));
+        assert!(!mark_push_scheduled(&per_pane));
+        assert!(!mark_push_scheduled(&per_pane));
+        per_pane.lock().unwrap().push_scheduled = false;
+        assert!(mark_push_scheduled(&per_pane));
     }
 
     #[test]

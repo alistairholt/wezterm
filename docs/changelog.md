@@ -334,6 +334,14 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* With a unix, SSH or TLS mux domain, a fast window resize could leave
+  the panes at a size from the middle of the drag. The client laid the
+  tab out again at the server's older size each time the server reported
+  a resize, and sent that size back.
+* A mux server could stop answering, so resizes, typing and
+  `wezterm cli` all hung, while a pane in a background tab printed output
+  nonstop. The server now reads requests before sending queued updates,
+  and queues one update per pane at a time.
 * With
   [switch_to_last_active_tab_when_closing_tab](config/lua/config/switch_to_last_active_tab_when_closing_tab.md),
   closing a tab to the left of the previously active tab activated the
