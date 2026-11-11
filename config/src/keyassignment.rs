@@ -606,6 +606,7 @@ pub enum KeyAssignment {
     ExtendSelectionToMouseCursor(SelectionMode),
     OpenLinkAtMouseCursor,
     ClearSelection,
+    SelectAll,
     CompleteSelection(ClipboardCopyDestination),
     CompleteSelectionOrOpenLinkAtMouseCursor(ClipboardCopyDestination),
     StartWindowDrag,

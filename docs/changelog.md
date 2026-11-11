@@ -173,6 +173,9 @@ As features stabilize some brief notes about them will accumulate here.
 * [ShowLastCommandOutputInPager](config/lua/keyassignment/ShowLastCommandOutputInPager.md)
   opens the last command's output in a pager in a new tab, as kitty's
   `show_last_non_empty_command_output` does. Needs shell integration.
+* [SelectAll](config/lua/keyassignment/SelectAll.md), bound to
+  `CMD-a` and in the Edit menu, selects the whole scrollback and screen,
+  as iTerm's Select All does.
 * [ToggleMaximize](config/lua/keyassignment/ToggleMaximize.md) switches
   the window between filling the screen and its previous size, as kitty's
   `toggle_maximized` does. It is in the Window menu as "Zoom".
