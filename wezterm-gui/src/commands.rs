@@ -836,6 +836,17 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Edit"],
             icon: Some("md_text_search"),
         },
+        CopyLastCommandOutput => CommandDef {
+            brief: "Copy output of last command".into(),
+            doc: "Copies the output of the last command that printed \
+              something in the current pane to the clipboard. Needs \
+              shell integration."
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Edit"],
+            icon: Some("md_content_copy"),
+        },
         ShowLastCommandOutputInPager => CommandDef {
             brief: "Show last command output in pager".into(),
             doc: "Opens the output of the last command that printed \
@@ -2138,6 +2149,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ClearScrollback(ScrollbackEraseMode::ScrollbackAndViewport),
         ShowScrollbackInPager,
         ShowLastCommandOutputInPager,
+        CopyLastCommandOutput,
         QuickSelect,
         CharSelect(CharSelectArguments::default()),
         ActivateCopyMode,

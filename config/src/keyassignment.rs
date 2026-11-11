@@ -579,6 +579,7 @@ pub enum KeyAssignment {
     ShowDebugOverlay,
     ShowScrollbackInPager,
     ShowLastCommandOutputInPager,
+    CopyLastCommandOutput,
     ToggleBroadcastInput,
     HideApplication,
     ToggleSecureKeyboardEntry,

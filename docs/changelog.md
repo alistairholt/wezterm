@@ -164,6 +164,9 @@ As features stabilize some brief notes about them will accumulate here.
 * [macos_dock_badge_on_bell](config/lua/config/macos_dock_badge_on_bell.md)
   badges the Dock icon with the number of tabs that have a bell you
   haven't seen, as Terminal.app does. On by default.
+* [CopyLastCommandOutput](config/lua/keyassignment/CopyLastCommandOutput.md)
+  copies the last command's output to the clipboard, as iTerm2's "Copy
+  Output of Last Command" does. Needs shell integration.
 * [ShowLastCommandOutputInPager](config/lua/keyassignment/ShowLastCommandOutputInPager.md)
   opens the last command's output in a pager in a new tab, as kitty's
   `show_last_non_empty_command_output` does. Needs shell integration.
