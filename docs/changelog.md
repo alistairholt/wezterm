@@ -158,6 +158,9 @@ As features stabilize some brief notes about them will accumulate here.
   opens the pane's scrollback, with colors, in a pager in a new tab, like
   kitty's `show_scrollback`. The pager is set by
   [scrollback_pager](config/lua/config/scrollback_pager.md).
+* [ToggleBroadcastInput](config/lua/keyassignment/ToggleBroadcastInput.md)
+  sends what you type to every pane in the current tab, like iTerm2's
+  Broadcast Input. The tab's title shows 📢 while it is on.
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.

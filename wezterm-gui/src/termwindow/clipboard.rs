@@ -50,6 +50,9 @@ impl TermWindow {
                         })
                     {
                         pane.send_paste(&clip).ok();
+                        for target in myself.broadcast_input_targets(&pane) {
+                            target.send_paste(&clip).ok();
+                        }
                     }
                 })));
             }

@@ -797,6 +797,16 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Shell"],
             icon: Some("cod_empty_window"),
         },
+        ToggleBroadcastInput => CommandDef {
+            brief: "Broadcast input to all panes in tab".into(),
+            doc: "Toggles sending what you type in the active pane to \
+              every pane in the current tab as well."
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Shell"],
+            icon: Some("md_broadcast"),
+        },
         ShowScrollbackInPager => CommandDef {
             brief: "Show scrollback in pager".into(),
             doc: "Opens the current pane's scrollback and screen, with \
@@ -2079,6 +2089,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         // ----------------- Shell
         SpawnTab(SpawnTabDomain::CurrentPaneDomain),
         SpawnWindow,
+        ToggleBroadcastInput,
         SplitVertical(SpawnCommand {
             domain: SpawnTabDomain::CurrentPaneDomain,
             ..Default::default()
