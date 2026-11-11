@@ -939,7 +939,7 @@ impl AlertHandler for LocalPaneNotifHandler {
                 Alert::WindowTitleChanged(title) => {
                     if let Some((_domain, window_id, _tab_id)) = mux.resolve_pane_id(pane_id) {
                         if let Some(mut window) = mux.get_window_mut(window_id) {
-                            window.set_title(title);
+                            window.set_title_from_pane(title);
                         }
                     }
                 }

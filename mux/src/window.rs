@@ -13,6 +13,9 @@ pub struct Window {
     last_active_tab_id: Option<TabId>,
     workspace: String,
     title: String,
+    /// True when the title came from `set_title` (the cli or Lua), rather
+    /// than from a pane's escape sequence.
+    title_is_explicit: bool,
     initial_position: Option<GuiPosition>,
 }
 
@@ -25,6 +28,7 @@ impl Window {
             active_tab_idx: 0,
             last_active_tab_id: None,
             title: String::new(),
+            title_is_explicit: false,
             workspace: workspace.unwrap_or_else(|| Mux::get().active_workspace()),
             initial_position,
         }
@@ -41,7 +45,30 @@ impl Window {
     }
 
     /// Set window title, notifying listeners if it changed.
+    /// The GUI shows this title in place of the active pane's title.
     pub fn set_title(&mut self, title: &str) {
+        self.title_is_explicit = true;
+        self.update_title(title);
+    }
+
+    /// Record a title that a pane set with an escape sequence.
+    /// The GUI keeps showing the active pane's title.
+    pub fn set_title_from_pane(&mut self, title: &str) {
+        self.title_is_explicit = false;
+        self.update_title(title);
+    }
+
+    /// Return the title set with `set_title`, if the latest title came
+    /// from there rather than from a pane.
+    pub fn get_explicit_title(&self) -> Option<&str> {
+        if self.title_is_explicit && !self.title.is_empty() {
+            Some(&self.title)
+        } else {
+            None
+        }
+    }
+
+    fn update_title(&mut self, title: &str) {
         if self.title != title {
             self.title = title.to_string();
             Mux::try_get().map(|mux| {
