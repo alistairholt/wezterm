@@ -334,6 +334,10 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* With a unix, SSH or TLS mux domain, the GUI's memory grew without limit
+  while a pane printed a lot of output, once the window had been resized.
+  The cache of lines received from the server lost its size limit on the
+  first resize.
 * With a unix, SSH or TLS mux domain, a fast window resize could leave
   the panes at a size from the middle of the drag. The client laid the
   tab out again at the server's older size each time the server reported

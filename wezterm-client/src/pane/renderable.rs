@@ -428,15 +428,7 @@ impl RenderableInner {
     }
 
     pub fn make_all_stale(&mut self) {
-        let mut lines = LruCache::unbounded();
-        while let Some((stable_row, entry)) = self.lines.pop_lru() {
-            let entry = match entry {
-                LineEntry::Stale(old) | LineEntry::Line(old) => LineEntry::Stale(old),
-                entry => entry,
-            };
-            lines.put(stable_row, entry);
-        }
-        self.lines = lines;
+        make_all_stale(&mut self.lines);
     }
 
     fn make_stale(&mut self, stable_row: StableRowIndex) {
@@ -861,5 +853,42 @@ impl RenderableState {
 
     pub fn get_dimensions(&self) -> RenderableDimensions {
         self.inner.borrow().dimensions
+    }
+}
+
+/// Mark every cached line stale, keeping the cache's order and capacity.
+/// An unbounded cache here lost the cap on the first resize, and from
+/// then on every line a busy pane printed stayed in memory.
+fn make_all_stale(lines: &mut LruCache<StableRowIndex, LineEntry>) {
+    let mut stale = LruCache::new(lines.cap());
+    while let Some((stable_row, entry)) = lines.pop_lru() {
+        let entry = match entry {
+            LineEntry::Stale(old) | LineEntry::Line(old) => LineEntry::Stale(old),
+            entry => entry,
+        };
+        stale.put(stable_row, entry);
+    }
+    *lines = stale;
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn make_all_stale_keeps_the_cache_capacity() {
+        // A resize marks every line stale. The cache must stay capped
+        // afterwards, or a pane that keeps printing grows it forever.
+        let mut lines = LruCache::new(NonZeroUsize::new(4).unwrap());
+        for row in 0..4 {
+            lines.put(row, LineEntry::Line(Line::with_width(10, SEQ_ZERO)));
+        }
+        make_all_stale(&mut lines);
+        assert_eq!(lines.cap().get(), 4);
+        assert!(lines.iter().all(|(_, e)| matches!(e, LineEntry::Stale(_))));
+        // The least recently used line is still the first to go.
+        lines.put(4, LineEntry::Line(Line::with_width(10, SEQ_ZERO)));
+        assert_eq!(lines.len(), 4);
+        assert!(!lines.contains(&0));
     }
 }
