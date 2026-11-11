@@ -825,6 +825,16 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Shell"],
             icon: Some("md_broadcast"),
         },
+        SaveScrollbackToFile => CommandDef {
+            brief: "Save contents...".into(),
+            doc: "Saves the current pane's scrollback and screen as \
+              plain text to a file you choose."
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Shell"],
+            icon: Some("md_content_save"),
+        },
         ShowScrollbackInPager => CommandDef {
             brief: "Show scrollback in pager".into(),
             doc: "Opens the current pane's scrollback and screen, with \
@@ -2142,6 +2152,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         SpawnWindow,
         ToggleBroadcastInput,
         NotifyWhenCommandFinishes,
+        SaveScrollbackToFile,
         SplitVertical(SpawnCommand {
             domain: SpawnTabDomain::CurrentPaneDomain,
             ..Default::default()
