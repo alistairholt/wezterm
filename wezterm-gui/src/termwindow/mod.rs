@@ -10,6 +10,7 @@ use crate::overlay::{
     start_overlay, start_overlay_pane, CopyModeParams, CopyOverlay, LauncherArgs, LauncherFlags,
     QuickSelectOverlay,
 };
+use crate::quad::HeapQuadAllocator;
 use crate::resize_increment_calculator::ResizeIncrementCalculator;
 use crate::scripting::guiwin::GuiWin;
 use crate::scrollbar::*;
@@ -441,6 +442,9 @@ pub struct TermWindow {
     next_line_state_id: u64,
 
     line_quad_cache: RefCell<LfuCache<LineQuadCacheKey, LineQuadCacheValue>>,
+    /// Reused to build each line's quads before a compact copy goes into
+    /// line_quad_cache; see HeapQuadAllocator.
+    line_quad_scratch: RefCell<HeapQuadAllocator>,
 
     last_status_call: Instant,
     cursor_blink_state: RefCell<ColorEase>,
@@ -761,6 +765,7 @@ impl TermWindow {
                 |config| config.line_quad_cache_size,
                 &config,
             )),
+            line_quad_scratch: RefCell::new(HeapQuadAllocator::default()),
             line_to_ele_shape_cache: RefCell::new(LfuCache::new(
                 "line_to_ele_shape_cache.hit.rate",
                 "line_to_ele_shape_cache.miss.rate",
