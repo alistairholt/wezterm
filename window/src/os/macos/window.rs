@@ -142,6 +142,38 @@ unsafe impl objc::Encode for NSRangePointer {
     }
 }
 
+#[link(name = "Foundation", kind = "framework")]
+extern "C" {
+    static NSRunLoopCommonModes: id;
+}
+
+/// QuartzCore's `CAFrameRateRange`, passed to
+/// `-[CADisplayLink setPreferredFrameRateRange:]`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CAFrameRateRange {
+    minimum: f32,
+    maximum: f32,
+    preferred: f32,
+}
+
+unsafe impl objc::Encode for CAFrameRateRange {
+    fn encode() -> objc::Encoding {
+        unsafe { objc::Encoding::from_str("{CAFrameRateRange=fff}") }
+    }
+}
+
+/// The frame rate range for a window's display link: up to `max_fps`,
+/// which the system then limits to what the window's display can do.
+fn frame_rate_range(max_fps: u64) -> CAFrameRateRange {
+    let max = max_fps.clamp(1, 1000) as f32;
+    CAFrameRateRange {
+        minimum: max.min(30.),
+        maximum: max,
+        preferred: max,
+    }
+}
+
 impl NSRange {
     fn new(location: u64, length: u64) -> Self {
         Self(cocoa::foundation::NSRange { location, length })
@@ -264,7 +296,7 @@ impl Window {
                 window_id,
                 window: None,
                 screen_changed: false,
-                paint_throttled: false,
+                display_link: None,
                 invalidated: true,
                 text_cursor_position: Rect::new(Point::new(0, 0), Size::new(0, 0)),
                 tracking_rect_tag: 0,
@@ -1073,10 +1105,16 @@ impl WindowInner {
 
     fn invalidate(&mut self) {
         unsafe {
-            let () = msg_send![*self.view, setNeedsDisplay: YES];
             if let Some(window_view) = WindowView::get_this(&**self.view) {
-                window_view.inner.borrow_mut().invalidated = true;
+                let mut inner = window_view.inner.borrow_mut();
+                inner.invalidated = true;
+                if let Some(link) = &inner.display_link {
+                    // The next tick of the display link displays the view.
+                    let () = msg_send![**link, setPaused: NO];
+                    return;
+                }
             }
+            let () = msg_send![*self.view, setNeedsDisplay: YES];
         }
     }
     fn set_title(&mut self, title: &str) {
@@ -1188,6 +1226,12 @@ impl WindowInner {
             inner.config = config.clone();
             if dpi_changed {
                 inner.screen_changed = true;
+            }
+            if let Some(link) = &inner.display_link {
+                let range = frame_rate_range(config.max_fps);
+                unsafe {
+                    let () = msg_send![**link, setPreferredFrameRateRange: range];
+                }
             }
         }
         self.update_window_shadow();
@@ -1383,7 +1427,10 @@ struct Inner {
     view_id: Option<WeakPtr>,
     window: Option<WeakPtr>,
     screen_changed: bool,
-    paint_throttled: bool,
+    /// The view's CADisplayLink. It runs only while the window is
+    /// invalidated, and each tick asks AppKit to display the view, so
+    /// paints follow the display's refresh rate, capped by max_fps.
+    display_link: Option<StrongPtr>,
     window_id: usize,
     invalidated: bool,
     text_cursor_position: Rect,
@@ -2140,6 +2187,13 @@ impl WindowView {
 
     extern "C" fn window_will_close(this: &mut Object, _sel: Sel, _id: id) {
         if let Some(this) = Self::get_this(this) {
+            // The display link retains the view as its target, and the run
+            // loop retains the link; invalidate it to break that cycle.
+            if let Some(link) = this.inner.borrow_mut().display_link.take() {
+                unsafe {
+                    let () = msg_send![*link, invalidate];
+                }
+            }
             // Advise the window of its impending death
             this.inner
                 .borrow_mut()
@@ -2939,42 +2993,59 @@ impl WindowView {
                 return;
             }
 
-            if inner.live_resizing {
-                // During a live resize AppKit calls us once per size step
-                // (NSViewLayerContentsRedrawDuringViewResize) and then shows
-                // whatever our GL surface holds, scaled to the new bounds.
-                // If we skip this step because of max_fps throttling, the
-                // user sees the previous frame stretched or squeezed, so
-                // paint now regardless of the throttle.
-                inner.events.dispatch(WindowEvent::NeedRepaint);
-                inner.invalidated = false;
-            } else if inner.paint_throttled {
-                inner.invalidated = true;
-            } else {
-                inner.events.dispatch(WindowEvent::NeedRepaint);
-                inner.invalidated = false;
-                inner.paint_throttled = true;
+            // Paint on every call. Outside a live resize, calls are paced by
+            // the display link (display_link_fired), which only asks for a
+            // display once per refresh, capped by max_fps. During a live
+            // resize AppKit calls us once per size step
+            // (NSViewLayerContentsRedrawDuringViewResize); skipping a step
+            // would show the previous frame at the wrong size.
+            inner.events.dispatch(WindowEvent::NeedRepaint);
+            inner.invalidated = false;
+        }
+    }
 
-                let window_id = inner.window_id;
-                let max_fps = inner.config.max_fps;
-                promise::spawn::spawn(async move {
-                    async_io::Timer::after(std::time::Duration::from_millis(1000 / max_fps as u64))
-                        .await;
-                    Connection::with_window_inner(window_id, move |inner| {
-                        if let Some(window_view) = WindowView::get_this(unsafe { &**inner.view }) {
-                            let mut state = window_view.inner.borrow_mut();
-                            state.paint_throttled = false;
-                            if state.invalidated {
-                                unsafe {
-                                    let () = msg_send![*inner.view, setNeedsDisplay: YES];
-                                }
-                            }
-                        }
-                        Ok(())
-                    });
-                })
-                .detach();
+    /// Called by the view's CADisplayLink once per display refresh while
+    /// it is running. Display the view if something changed since the
+    /// last paint; otherwise pause the link until the next invalidate,
+    /// so an idle window costs nothing.
+    extern "C" fn display_link_fired(view: &mut Object, _sel: Sel, link: id) {
+        let Some(this) = Self::get_this(view) else {
+            return;
+        };
+        let invalidated = this.inner.borrow().invalidated;
+        unsafe {
+            if invalidated {
+                let () = msg_send![view as *mut Object, setNeedsDisplay: YES];
+            } else {
+                let () = msg_send![link, setPaused: YES];
             }
+        }
+    }
+
+    /// Create the view's display link, paused until the first invalidate.
+    fn start_display_link(view: id, max_fps: u64) -> Option<StrongPtr> {
+        unsafe {
+            let responds: BOOL = msg_send![
+                view,
+                respondsToSelector: sel!(displayLinkWithTarget:selector:)
+            ];
+            if responds == NO {
+                log::warn!("NSView.displayLink is unavailable; painting without pacing");
+                return None;
+            }
+            let link: id = msg_send![
+                view,
+                displayLinkWithTarget: view
+                selector: sel!(weztermDisplayLinkFired:)
+            ];
+            if link.is_null() {
+                return None;
+            }
+            let link = StrongPtr::retain(link);
+            let () = msg_send![*link, setPreferredFrameRateRange: frame_rate_range(max_fps)];
+            let run_loop: id = msg_send![class!(NSRunLoop), mainRunLoop];
+            let () = msg_send![*link, addToRunLoop: run_loop forMode: NSRunLoopCommonModes];
+            Some(link)
         }
     }
 
@@ -3056,6 +3127,10 @@ impl WindowView {
             (**view_id).set_ivar(VIEW_CLS_NAME, view as *mut c_void);
         }
 
+        let max_fps = inner.borrow().config.max_fps;
+        let link = Self::start_display_link(*view_id, max_fps);
+        inner.borrow_mut().display_link = link;
+
         Ok(view_id)
     }
 
@@ -3089,6 +3164,11 @@ impl WindowView {
             cls.add_method(
                 sel!(windowWillClose:),
                 Self::window_will_close as extern "C" fn(&mut Object, Sel, id),
+            );
+
+            cls.add_method(
+                sel!(weztermDisplayLinkFired:),
+                Self::display_link_fired as extern "C" fn(&mut Object, Sel, id),
             );
 
             cls.add_method(
@@ -3344,8 +3424,9 @@ impl WindowView {
 /// by motionrec's frames.csv), so recordings can be lined up with steps.
 ///
 /// With `WEZTERM_DEBUG_RESIZE_NOT_LIVE=1` the steps run outside a live
-/// resize, so the max_fps throttle applies and skips steps. That shows
-/// what an undrawn step looks like (the layer's contents gravity).
+/// resize. Each step still displays synchronously through
+/// setFrame:display:YES, but the presents are not tied to the resize
+/// transaction.
 mod debug_resize {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -3442,5 +3523,34 @@ mod debug_resize {
             log::info!("debug-resize end host_time={:.6}", host_time());
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// The display link asks for max_fps, never more than 1000 or less
+    /// than 1, and never sets a minimum above the maximum.
+    #[test]
+    fn frame_rate_range_follows_max_fps() {
+        assert_eq!(
+            frame_rate_range(120),
+            CAFrameRateRange {
+                minimum: 30.,
+                maximum: 120.,
+                preferred: 120.,
+            }
+        );
+        assert_eq!(
+            frame_rate_range(10),
+            CAFrameRateRange {
+                minimum: 10.,
+                maximum: 10.,
+                preferred: 10.,
+            }
+        );
+        assert_eq!(frame_rate_range(0).maximum, 1.);
+        assert_eq!(frame_rate_range(5000).maximum, 1000.);
     }
 }

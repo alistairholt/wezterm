@@ -339,9 +339,10 @@ Start only after the platform-removal branch has landed (owner/main confirms).
 - Modify: `window/src/os/macos/window.rs` (create `[view displayLinkWithTarget:selector:]` on first show; callback `display_link_fired` calls `setNeedsDisplay:` only when `invalidated`, pauses the link (`paused = YES`) when not; `invalidate()` unpauses; set `preferredFrameRateRange` to `(min: 30, max: max_fps, preferred: max_fps)`; remove the `paint_throttled` timer)
 - Test: matrix rows M8, M10.
 
-- [ ] **Step 1:** Implement behind a `respondsToSelector:` check; keep the timer path when unavailable (or delete it if Q1 = raise floor to 14).
-- [ ] **Step 2:** M8: `yes | head -c 50M` in a pane on the built-in display; Instruments (`xctrace record --template 'Animation Hitches'`) shows ~120 presents/s, no hitches. Idle 10 s: 0 presents (count `metal_present: step` lines).
-- [ ] **Step 3: Commit** `window: pace macOS paints with NSView display link`.
+- [x] **Step 1:** Implement behind a `respondsToSelector:` check; keep the timer path when unavailable (or delete it if Q1 = raise floor to 14). Q1 raised the floor to 14, so the timer is gone; without a display link `invalidate()` falls back to an unpaced `setNeedsDisplay:`.
+- [x] **Step 2:** M8: `yes | head -c 50M` in a pane on the built-in display; Instruments (`xctrace record --template 'Animation Hitches'`) shows ~120 presents/s, no hitches. Idle 10 s: 0 presents (count `metal_present: step` lines).
+  Result (release build, built-in display, `max_fps = 120`): 120 presents/s through the flood (was 60 with the timer), and the 50 MB flood finished in 16 s instead of 23 s. Animation Hitches over 10 s: 4 single-frame hitches (6.3 ms/s), against 3 (7.1 ms/s) for the timer build at the same moments. Idle: 1-2 presents at startup, then none. 20 output updates 0.5 s apart: 21 presents.
+- [x] **Step 3: Commit** `window: pace macOS paints with NSView display link`.
 
 ### Task 7 (optional, Q3): Colour-managed output
 

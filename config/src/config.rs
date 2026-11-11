@@ -1766,8 +1766,11 @@ fn default_anim_fps() -> u8 {
     10
 }
 
+/// Painting on macOS follows the display link, which never runs faster
+/// than the display, so 120 allows ProMotion rates without changing
+/// anything on 60Hz displays.
 fn default_max_fps() -> u64 {
-    60
+    120
 }
 
 fn default_tiling_desktop_environments() -> Vec<String> {
@@ -2158,6 +2161,12 @@ fn default_colr_rasterizer() -> FontRasterizerSelection {
 mod test {
     use super::*;
     use termwiz::hyperlink::Rule;
+
+    /// The default frame rate cap allows 120Hz on ProMotion displays.
+    #[test]
+    fn max_fps_defaults_to_120() {
+        assert_eq!(default_max_fps(), 120);
+    }
 
     /// The default rules as upstream wezterm has them.
     fn upstream_rules() -> Vec<Rule> {
