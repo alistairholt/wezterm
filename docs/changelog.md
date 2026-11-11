@@ -247,6 +247,9 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* Opening a folder with WezTerm, by dropping it on the Dock icon or with
+  `open -a WezTerm DIR`, now opens a window with a shell in that folder.
+  Before, it typed the folder's path into a new shell as a command.
 * `wezterm cli set-window-title` and `MuxWindow:set_title` had no
   visible effect: the window kept showing the active pane's title. The
   title now shows until a pane sets a new title. #4899
