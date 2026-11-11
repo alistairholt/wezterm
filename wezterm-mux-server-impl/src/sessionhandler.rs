@@ -4,6 +4,7 @@ use codec::*;
 use config::TermConfig;
 use mux::client::ClientId;
 use mux::domain::SplitSource;
+use mux::output_signal::{RepaintWait, RepaintWaitOutcome};
 use mux::pane::{CachePolicy, Pane, PaneId};
 use mux::renderable::{RenderableDimensions, StableCursorPosition};
 use mux::tab::TabId;
@@ -11,11 +12,11 @@ use mux::{Mux, MuxNotification};
 use promise::spawn::spawn_into_main_thread;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use termwiz::surface::SequenceNo;
 use url::Url;
 use wezterm_term::terminal::Alert;
-use wezterm_term::StableRowIndex;
+use wezterm_term::{StableRowIndex, TerminalSize};
 
 #[derive(Clone)]
 pub struct PduSender {
@@ -47,6 +48,126 @@ pub(crate) struct PerPane {
     seqno: SequenceNo,
     config_generation: usize,
     pub(crate) notifications: Vec<Alert>,
+    /// Number of resizes of this pane that are waiting for it to redraw
+    /// before replying. Pushes are held back while this is non-zero.
+    resize_repaint_waits: usize,
+}
+
+/// Counts a resize wait in `PerPane::resize_repaint_waits` while alive.
+struct ResizeRepaintWaitGuard {
+    per_pane: Arc<Mutex<PerPane>>,
+}
+
+impl ResizeRepaintWaitGuard {
+    fn new(per_pane: &Arc<Mutex<PerPane>>) -> Self {
+        per_pane.lock().unwrap().resize_repaint_waits += 1;
+        Self {
+            per_pane: Arc::clone(per_pane),
+        }
+    }
+}
+
+impl Drop for ResizeRepaintWaitGuard {
+    fn drop(&mut self) {
+        self.per_pane.lock().unwrap().resize_repaint_waits -= 1;
+    }
+}
+
+/// The longest a client may ask us to wait for a pane to redraw after a
+/// resize.
+const MAX_RESIZE_REPAINT_WAIT: Duration = Duration::from_millis(100);
+
+/// Wait for the pane behind `mark` to redraw after a resize at `resized`.
+/// The wait blocks a thread from smol's blocking pool, not the caller's.
+async fn wait_for_repaint(
+    mark: Option<RepaintWait>,
+    resized: Instant,
+    budget: Duration,
+) -> ResizeRepaintStop {
+    let Some(mark) = mark else {
+        return ResizeRepaintStop::NoSignal;
+    };
+    match smol::unblock(move || mark.wait(resized, resized + budget)).await {
+        RepaintWaitOutcome::Quiet => ResizeRepaintStop::Quiet,
+        RepaintWaitOutcome::SyncEnd => ResizeRepaintStop::SyncEnd,
+        RepaintWaitOutcome::NoOutput => ResizeRepaintStop::NoOutput,
+        RepaintWaitOutcome::Budget => ResizeRepaintStop::Budget,
+    }
+}
+
+/// Handle a `Resize` request. Runs on the main thread. When the client asks
+/// for a repaint wait, the wait happens on a blocking thread so the main
+/// thread keeps serving other clients and panes; the changes are then
+/// computed back on the main thread and returned in the reply.
+async fn resize_pane(
+    containing_tab_id: TabId,
+    pane_id: PaneId,
+    size: TerminalSize,
+    repaint_wait_ms: u64,
+    per_pane: Arc<Mutex<PerPane>>,
+) -> anyhow::Result<Pdu> {
+    let mux = Mux::get();
+    let pane = mux
+        .get_pane(pane_id)
+        .ok_or_else(|| anyhow!("no such pane {}", pane_id))?;
+
+    // Take the output mark and hold back pushes before resizing, so that
+    // both cover everything the program writes in response.
+    let wait = if repaint_wait_ms > 0 {
+        let guard = ResizeRepaintWaitGuard::new(&per_pane);
+        let mark = mux
+            .pane_output_signal(pane_id)
+            .map(|signal| signal.begin_wait());
+        Some((guard, mark))
+    } else {
+        None
+    };
+
+    pane.resize(size)?;
+    let resized = Instant::now();
+    let tab = mux
+        .get_tab(containing_tab_id)
+        .ok_or_else(|| anyhow!("no such tab {}", containing_tab_id))?;
+    tab.rebuild_splits_sizes_from_contained_panes();
+    drop(tab);
+    drop(pane);
+    drop(mux);
+
+    let Some((guard, mark)) = wait else {
+        return Ok(Pdu::UnitResponse(UnitResponse {}));
+    };
+
+    let budget = Duration::from_millis(repaint_wait_ms).min(MAX_RESIZE_REPAINT_WAIT);
+    let stopped = wait_for_repaint(mark, resized, budget).await;
+    let waited = resized.elapsed();
+
+    let mux = Mux::get();
+    let pane = mux
+        .get_pane(pane_id)
+        .ok_or_else(|| anyhow!("no such pane {}", pane_id))?;
+    let changes = {
+        let mut per_pane = per_pane.lock().unwrap();
+        per_pane.compute_changes(&pane, None)
+    };
+    // Release the hold on pushes only after computing the changes, so
+    // that a push held back during the wait is covered by this reply.
+    drop(guard);
+
+    log::trace!(
+        "resize repaint wait: pane {pane_id} {}x{} waited {waited:?} \
+         (budget {budget:?}), stopped: {}, {} lines",
+        size.cols,
+        size.rows,
+        stopped.as_str(),
+        changes.as_ref().map(|c| c.bonus_lines.len()).unwrap_or(0),
+    );
+
+    Ok(Pdu::ResizeRepaintResponse(ResizeRepaintResponse {
+        pane_id,
+        stopped,
+        waited_us: waited.as_micros() as u64,
+        changes,
+    }))
 }
 
 impl PerPane {
@@ -157,7 +278,16 @@ fn maybe_push_pane_changes(
     per_pane: Arc<Mutex<PerPane>>,
 ) -> anyhow::Result<()> {
     let mut per_pane = per_pane.lock().unwrap();
-    if let Some(resp) = per_pane.compute_changes(pane, None) {
+    if per_pane.resize_repaint_waits > 0 {
+        // A resize is waiting for this pane to redraw; its reply will
+        // carry these changes. Pushing them now would let them reach
+        // the client before the reply, which the client then applies
+        // after it has painted.
+        log::trace!(
+            "resize repaint wait: pane {} holding back push",
+            pane.pane_id()
+        );
+    } else if let Some(resp) = per_pane.compute_changes(pane, None) {
         sender.send(DecodedPdu {
             pdu: Pdu::GetPaneRenderChangesResponse(resp),
             serial: 0,
@@ -643,23 +773,14 @@ impl SessionHandler {
                 containing_tab_id,
                 pane_id,
                 size,
+                repaint_wait_ms,
             }) => {
+                let per_pane = self.per_pane(pane_id);
                 spawn_into_main_thread(async move {
-                    catch(
-                        move || {
-                            let mux = Mux::get();
-                            let pane = mux
-                                .get_pane(pane_id)
-                                .ok_or_else(|| anyhow!("no such pane {}", pane_id))?;
-                            pane.resize(size)?;
-                            let tab = mux
-                                .get_tab(containing_tab_id)
-                                .ok_or_else(|| anyhow!("no such tab {}", containing_tab_id))?;
-                            tab.rebuild_splits_sizes_from_contained_panes();
-                            Ok(Pdu::UnitResponse(UnitResponse {}))
-                        },
-                        send_response,
-                    )
+                    send_response(
+                        resize_pane(containing_tab_id, pane_id, size, repaint_wait_ms, per_pane)
+                            .await,
+                    );
                 })
                 .detach();
             }
@@ -1006,6 +1127,7 @@ impl SessionHandler {
             | Pdu::UnitResponse { .. }
             | Pdu::LivenessResponse { .. }
             | Pdu::GetPaneDirectionResponse { .. }
+            | Pdu::ResizeRepaintResponse { .. }
             | Pdu::SearchScrollbackResponse { .. }
             | Pdu::GetLinesResponse { .. }
             | Pdu::GetCodecVersionResponse { .. }
@@ -1133,4 +1255,79 @@ async fn move_pane(
         tab_id: tab.tab_id(),
         window_id,
     }))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use mux::output_signal::PaneOutputSignal;
+
+    #[test]
+    fn repaint_wait_without_signal_returns_at_once() {
+        let start = Instant::now();
+        let stopped = smol::block_on(wait_for_repaint(None, start, Duration::from_millis(50)));
+        assert_eq!(stopped, ResizeRepaintStop::NoSignal);
+        assert!(start.elapsed() < Duration::from_millis(40));
+    }
+
+    #[test]
+    fn repaint_wait_stops_when_output_goes_quiet() {
+        let signal = PaneOutputSignal::new();
+        let mark = signal.begin_wait();
+        let resized = Instant::now();
+        // Play the parser thread: read a redraw shortly after the
+        // resize, then apply it.
+        let parser = Arc::clone(&signal);
+        let thread = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_micros(500));
+            parser.note_read();
+            parser.note_idle(false, false);
+        });
+        let stopped = smol::block_on(wait_for_repaint(
+            Some(mark),
+            resized,
+            Duration::from_millis(500),
+        ));
+        thread.join().unwrap();
+        assert_eq!(stopped, ResizeRepaintStop::Quiet);
+        assert!(resized.elapsed() < Duration::from_millis(400));
+    }
+
+    #[test]
+    fn repaint_wait_does_not_block_the_calling_thread() {
+        // Output that never finishes applying runs the wait to its
+        // budget. Another task on the same executor thread must keep
+        // running meanwhile, as the server's main thread serves other
+        // clients during the wait.
+        let signal = PaneOutputSignal::new();
+        let mark = signal.begin_wait();
+        signal.note_read();
+        let resized = Instant::now();
+        let ticks = std::sync::atomic::AtomicUsize::new(0);
+        let (stopped, ()) = smol::block_on(async {
+            futures::join!(
+                wait_for_repaint(Some(mark), resized, Duration::from_millis(30)),
+                async {
+                    for _ in 0..5 {
+                        smol::Timer::after(Duration::from_millis(1)).await;
+                        ticks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+            )
+        });
+        assert_eq!(stopped, ResizeRepaintStop::Budget);
+        assert_eq!(ticks.load(std::sync::atomic::Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn resize_wait_guard_counts_waits() {
+        let per_pane = Arc::new(Mutex::new(PerPane::default()));
+        let first = ResizeRepaintWaitGuard::new(&per_pane);
+        let second = ResizeRepaintWaitGuard::new(&per_pane);
+        assert_eq!(per_pane.lock().unwrap().resize_repaint_waits, 2);
+        drop(first);
+        assert_eq!(per_pane.lock().unwrap().resize_repaint_waits, 1);
+        drop(second);
+        assert_eq!(per_pane.lock().unwrap().resize_repaint_waits, 0);
+    }
 }

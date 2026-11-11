@@ -442,7 +442,7 @@ macro_rules! pdu {
 /// The overall version of the codec.
 /// This must be bumped when backwards incompatible changes
 /// are made to the types and protocol.
-pub const CODEC_VERSION: usize = 46;
+pub const CODEC_VERSION: usize = 47;
 
 // Defines the Pdu enum.
 // Each struct has an explicit identifying number.
@@ -503,6 +503,7 @@ pdu! {
     GetPaneDirection: 60,
     GetPaneDirectionResponse: 61,
     AdjustPaneSize: 62,
+    ResizeRepaintResponse: 63,
 }
 
 impl Pdu {
@@ -855,6 +856,51 @@ pub struct Resize {
     pub containing_tab_id: TabId,
     pub pane_id: PaneId,
     pub size: TerminalSize,
+    /// When non-zero, the server waits up to this many milliseconds for
+    /// the pane's program to redraw at the new size, then replies with
+    /// `ResizeRepaintResponse` carrying the pane's changes. When zero it
+    /// replies with `UnitResponse` straight away.
+    pub repaint_wait_ms: u64,
+}
+
+/// Why the server stopped waiting for a pane to redraw after a resize.
+#[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone, Copy)]
+pub enum ResizeRepaintStop {
+    /// Output arrived, was applied, and then went quiet.
+    Quiet,
+    /// A synchronized output block ended and was applied.
+    SyncEnd,
+    /// Nothing arrived soon after the resize.
+    NoOutput,
+    /// The wait budget ran out.
+    Budget,
+    /// The pane has no output signal to wait on (it isn't a local pane
+    /// on the server).
+    NoSignal,
+}
+
+impl ResizeRepaintStop {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Quiet => "quiet",
+            Self::SyncEnd => "sync-end",
+            Self::NoOutput => "no-output",
+            Self::Budget => "budget",
+            Self::NoSignal => "no-signal",
+        }
+    }
+}
+
+/// The reply to a `Resize` with a non-zero `repaint_wait_ms`.
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct ResizeRepaintResponse {
+    pub pane_id: PaneId,
+    pub stopped: ResizeRepaintStop,
+    /// How long the server waited after resizing the pane, in microseconds.
+    pub waited_us: u64,
+    /// The pane's changes since the last update the server sent this
+    /// client, computed after the wait. None if nothing changed.
+    pub changes: Option<GetPaneRenderChangesResponse>,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
@@ -1007,6 +1053,17 @@ impl SerializedLines {
             lines
         };
         (lines, self.images)
+    }
+
+    /// Returns true if any cell refers to image data, which has to be
+    /// fetched separately before the lines can be used.
+    pub fn has_images(&self) -> bool {
+        !self.images.is_empty()
+    }
+
+    /// The number of lines held.
+    pub fn len(&self) -> usize {
+        self.lines.len()
     }
 }
 
@@ -1250,6 +1307,62 @@ mod test {
             },
             Pdu::decode(encoded.as_slice()).unwrap()
         );
+    }
+
+    #[test]
+    fn test_pdu_resize_round_trip() {
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 480,
+            dpi: 144,
+        };
+        let pdu = Pdu::Resize(Resize {
+            containing_tab_id: 3,
+            pane_id: 7,
+            size,
+            repaint_wait_ms: 8,
+        });
+        let mut encoded = Vec::new();
+        pdu.encode(&mut encoded, 0x10).unwrap();
+        let decoded = Pdu::decode(encoded.as_slice()).unwrap();
+        assert_eq!(decoded.serial, 0x10);
+        assert_eq!(decoded.pdu, pdu);
+    }
+
+    #[test]
+    fn test_pdu_resize_repaint_response_round_trip() {
+        let line = Line::from_text("hello", &Default::default(), 5, None);
+        let changes = GetPaneRenderChangesResponse {
+            pane_id: 7,
+            mouse_grabbed: false,
+            alt_screen_active: true,
+            cursor_position: StableCursorPosition::default(),
+            dimensions: RenderableDimensions::default(),
+            dirty_lines: vec![3..4],
+            title: "drydock".to_string(),
+            working_dir: None,
+            bonus_lines: vec![(2, line)].into(),
+            input_serial: None,
+            seqno: 5,
+        };
+        for (stopped, changes) in [
+            (ResizeRepaintStop::Quiet, Some(changes)),
+            (ResizeRepaintStop::NoSignal, None),
+        ] {
+            let pdu = Pdu::ResizeRepaintResponse(ResizeRepaintResponse {
+                pane_id: 7,
+                stopped,
+                waited_us: 2200,
+                changes,
+            });
+            let mut encoded = Vec::new();
+            pdu.encode(&mut encoded, 0x11).unwrap();
+            let decoded = Pdu::decode(encoded.as_slice()).unwrap();
+            assert_eq!(decoded.serial, 0x11);
+            assert_eq!(decoded.pdu, pdu);
+        }
     }
 
     #[test]

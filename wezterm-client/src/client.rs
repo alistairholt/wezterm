@@ -1290,6 +1290,20 @@ impl Client {
         rx.recv().await.context("send_pdu recv")?
     }
 
+    /// Queue `pdu` for sending without waiting for an executor to run,
+    /// and return the channel that will receive the reply. The client
+    /// thread sends it as soon as it wakes, and puts the reply on the
+    /// channel directly, so the caller can wait for it from any thread,
+    /// including the GUI's main thread.
+    pub fn send_pdu_now(&self, pdu: Pdu) -> anyhow::Result<Receiver<anyhow::Result<Pdu>>> {
+        let (promise, rx) = bounded(1);
+        self.sender
+            .try_send(ReaderMessage::SendPdu { pdu, promise })
+            .map_err(|_| ChannelSendError)
+            .context("send_pdu_now send")?;
+        Ok(rx)
+    }
+
     pub async fn resolve_pane_id(&self, pane_id: Option<PaneId>) -> anyhow::Result<PaneId> {
         let pane_id: PaneId = match pane_id {
             Some(p) => p,

@@ -17,10 +17,12 @@ use mux::{Mux, MuxNotification};
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use rangeset::RangeSet;
 use ratelim::RateLimiter;
+use smol::channel::{Receiver, TryRecvError};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use termwiz::input::KeyEvent;
 use termwiz::surface::SequenceNo;
 use url::Url;
@@ -50,6 +52,165 @@ pub struct ClientPane {
     config: Mutex<Option<Arc<dyn TerminalConfiguration>>>,
     unseen_output: Mutex<bool>,
     progress: Mutex<Progress>,
+    /// Set by `arm_live_resize_wait`; taken by the next resize.
+    live_resize_wait_budget: Mutex<Option<Duration>>,
+    /// The reply to the last resize that asked the server to wait.
+    pending_resize_reply: Mutex<Option<PendingResizeReply>>,
+}
+
+/// How much longer than the server's wait budget the GUI waits for the
+/// reply to a resize, to cover the round trip and the server's main
+/// thread getting to it.
+pub const RESIZE_REPLY_ALLOWANCE: Duration = Duration::from_millis(2);
+
+/// The reply to a `Resize` that asked the server to wait for the pane to
+/// redraw. Wait on it with `wait`; if it is dropped instead, the reply is
+/// applied on the main thread when it arrives. Either way the response
+/// channel stays open until the reply comes, because the client thread
+/// treats a closed channel as the client going away.
+pub struct PendingResizeReply {
+    rx: Option<Receiver<anyhow::Result<Pdu>>>,
+    local_pane_id: PaneId,
+}
+
+/// What happened to a resize reply that the GUI waited for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeReplyOutcome {
+    /// The reply arrived and its changes were applied to the line cache.
+    Applied {
+        stopped: ResizeRepaintStop,
+        server_waited: Duration,
+        lines: usize,
+    },
+    /// The reply arrived but refers to images that must be fetched first;
+    /// it is applied once they arrive.
+    Deferred {
+        stopped: ResizeRepaintStop,
+        server_waited: Duration,
+    },
+    /// Nothing arrived by the deadline; the reply is applied when it does.
+    Timeout,
+    /// The request failed, or the pane has gone.
+    Failed,
+}
+
+impl PendingResizeReply {
+    /// Block until the reply arrives or `deadline` passes. When it arrives
+    /// in time, its changes are applied before this returns, so the next
+    /// paint shows them. Call on the main thread.
+    pub fn wait(mut self, deadline: Instant) -> ResizeReplyOutcome {
+        let Some(rx) = self.rx.take() else {
+            return ResizeReplyOutcome::Failed;
+        };
+        let reply = match rx.try_recv() {
+            Ok(reply) => Some(reply),
+            Err(TryRecvError::Closed) => Some(Err(anyhow::anyhow!("client went away"))),
+            Err(TryRecvError::Empty) => smol::block_on(smol::future::or(
+                async {
+                    Some(
+                        rx.recv()
+                            .await
+                            .unwrap_or_else(|_| Err(anyhow::anyhow!("client went away"))),
+                    )
+                },
+                async {
+                    smol::Timer::at(deadline).await;
+                    None
+                },
+            )),
+        };
+        match reply {
+            Some(reply) => apply_resize_reply(self.local_pane_id, reply),
+            None => {
+                // Drop collects it later.
+                self.rx.replace(rx);
+                ResizeReplyOutcome::Timeout
+            }
+        }
+    }
+}
+
+impl Drop for PendingResizeReply {
+    fn drop(&mut self) {
+        let Some(rx) = self.rx.take() else {
+            return;
+        };
+        let local_pane_id = self.local_pane_id;
+        promise::spawn::spawn_into_main_thread(async move {
+            let reply = rx
+                .recv()
+                .await
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("client went away")));
+            apply_resize_reply(local_pane_id, reply);
+        })
+        .detach();
+    }
+}
+
+/// Apply the reply to a `Resize`. Call on the main thread.
+fn apply_resize_reply(local_pane_id: PaneId, reply: anyhow::Result<Pdu>) -> ResizeReplyOutcome {
+    let resp = match reply {
+        Ok(Pdu::ResizeRepaintResponse(resp)) => resp,
+        // A resize that didn't ask for a wait.
+        Ok(Pdu::UnitResponse(_)) => {
+            return ResizeReplyOutcome::Applied {
+                stopped: ResizeRepaintStop::NoSignal,
+                server_waited: Duration::ZERO,
+                lines: 0,
+            }
+        }
+        Ok(Pdu::ErrorResponse(ErrorResponse { reason })) => {
+            log::error!("resize pane {local_pane_id}: {reason}");
+            return ResizeReplyOutcome::Failed;
+        }
+        Ok(other) => {
+            log::error!("resize pane {local_pane_id}: unexpected response {other:?}");
+            return ResizeReplyOutcome::Failed;
+        }
+        Err(err) => {
+            log::error!("resize pane {local_pane_id}: {err:#}");
+            return ResizeReplyOutcome::Failed;
+        }
+    };
+    let stopped = resp.stopped;
+    let server_waited = Duration::from_micros(resp.waited_us);
+    let Some(mut changes) = resp.changes else {
+        return ResizeReplyOutcome::Applied {
+            stopped,
+            server_waited,
+            lines: 0,
+        };
+    };
+    let Some(pane) = Mux::get().get_pane(local_pane_id) else {
+        return ResizeReplyOutcome::Failed;
+    };
+    if pane.downcast_ref::<ClientPane>().is_none() {
+        return ResizeReplyOutcome::Failed;
+    }
+
+    if changes.bonus_lines.has_images() {
+        promise::spawn::spawn(async move {
+            if let Some(client_pane) = pane.downcast_ref::<ClientPane>() {
+                client_pane.apply_render_changes(changes, true).await;
+            }
+        })
+        .detach();
+        return ResizeReplyOutcome::Deferred {
+            stopped,
+            server_waited,
+        };
+    }
+
+    let client_pane = pane.downcast_ref::<ClientPane>().expect("checked above");
+    let (bonus_lines, _no_images) = std::mem::take(&mut changes.bonus_lines).extract_data();
+    let lines = bonus_lines.len();
+    let applied = client_pane.apply_hydrated_render_changes(changes, bonus_lines, true);
+    ResizeReplyOutcome::Applied {
+        stopped,
+        server_waited,
+        // Zero if a newer update had already been applied.
+        lines: if applied { lines } else { 0 },
+    }
 }
 
 impl ClientPane {
@@ -133,24 +294,15 @@ impl ClientPane {
             user_vars: Mutex::new(HashMap::new()),
             config: Mutex::new(None),
             progress: Mutex::new(Progress::default()),
+            live_resize_wait_budget: Mutex::new(None),
+            pending_resize_reply: Mutex::new(None),
         }
     }
 
     pub async fn process_unilateral(&self, pdu: Pdu) -> anyhow::Result<()> {
         match pdu {
-            Pdu::GetPaneRenderChangesResponse(mut delta) => {
-                *self.mouse_grabbed.lock() = delta.mouse_grabbed;
-                *self.alt_screen_active.lock() = delta.alt_screen_active;
-
-                let bonus_lines = std::mem::take(&mut delta.bonus_lines);
-                let client = { Arc::clone(&self.renderable.lock().inner.borrow().client) };
-                let bonus_lines = hydrate_lines(client, delta.pane_id, bonus_lines).await;
-
-                self.renderable
-                    .lock()
-                    .inner
-                    .borrow_mut()
-                    .apply_changes_to_surface(delta, bonus_lines);
+            Pdu::GetPaneRenderChangesResponse(delta) => {
+                self.apply_render_changes(delta, false).await;
             }
             Pdu::SetClipboard(SetClipboard {
                 clipboard,
@@ -237,6 +389,90 @@ impl ClientPane {
             _ => bail!("unhandled unilateral pdu: {:?}", pdu),
         };
         Ok(())
+    }
+
+    /// Fetch any images the changes refer to, then apply them.
+    async fn apply_render_changes(
+        &self,
+        mut delta: GetPaneRenderChangesResponse,
+        from_resize_reply: bool,
+    ) {
+        let bonus_lines = std::mem::take(&mut delta.bonus_lines);
+        let client = { Arc::clone(&self.renderable.lock().inner.borrow().client) };
+        let bonus_lines = hydrate_lines(client, delta.pane_id, bonus_lines).await;
+        self.apply_hydrated_render_changes(delta, bonus_lines, from_resize_reply);
+    }
+
+    /// Apply changes whose lines are ready to use. Returns false if the
+    /// changes were skipped because a resize reply already applied a
+    /// newer state.
+    fn apply_hydrated_render_changes(
+        &self,
+        delta: GetPaneRenderChangesResponse,
+        bonus_lines: Vec<(StableRowIndex, Line)>,
+        from_resize_reply: bool,
+    ) -> bool {
+        let mouse_grabbed = delta.mouse_grabbed;
+        let alt_screen_active = delta.alt_screen_active;
+        {
+            let render = self.renderable.lock();
+            let mut inner = render.inner.borrow_mut();
+            if !from_resize_reply && delta.seqno < inner.resize_reply_seqno {
+                // The resize reply was applied straight away on the main
+                // thread, ahead of this update which was queued earlier.
+                // Applying it now would put back older lines and the old
+                // dimensions.
+                log::trace!(
+                    "pane {} skipping changes at seqno {} older than resize reply at {}",
+                    self.local_pane_id,
+                    delta.seqno,
+                    inner.resize_reply_seqno
+                );
+                return false;
+            }
+            if from_resize_reply && delta.seqno < inner.seqno {
+                // A reply that nobody waited for, overtaken by a newer
+                // update. The resize already marked every cached line
+                // stale, so lines it would have refreshed are fetched
+                // again when next drawn.
+                log::trace!(
+                    "pane {} skipping resize reply at seqno {} older than {}",
+                    self.local_pane_id,
+                    delta.seqno,
+                    inner.seqno
+                );
+                return false;
+            }
+            if from_resize_reply {
+                inner.resize_reply_seqno = inner.resize_reply_seqno.max(delta.seqno);
+            }
+            inner.apply_changes_to_surface(delta, bonus_lines);
+        }
+        *self.mouse_grabbed.lock() = mouse_grabbed;
+        *self.alt_screen_active.lock() = alt_screen_active;
+        true
+    }
+
+    /// Ask that the next resize of this pane waits, on the server, up to
+    /// `budget` for the program to redraw, and returns the result. Use
+    /// `take_live_resize_reply` after resizing to collect the reply.
+    /// Returns false, and does nothing, unless the pane is in a unix
+    /// domain: over a network the round trip alone would use up the
+    /// budget on every step.
+    pub fn arm_live_resize_wait(&self, budget: Duration) -> bool {
+        if !self.client.client.is_local {
+            return false;
+        }
+        self.live_resize_wait_budget.lock().replace(budget);
+        true
+    }
+
+    /// Returns the reply to a resize sent after `arm_live_resize_wait`, if
+    /// one was sent, and disarms the wait. Dropping the result without
+    /// waiting on it applies the reply whenever it arrives.
+    pub fn take_live_resize_reply(&self) -> Option<PendingResizeReply> {
+        self.live_resize_wait_budget.lock().take();
+        self.pending_resize_reply.lock().take()
     }
 
     pub fn remote_pane_id(&self) -> TabId {
@@ -409,20 +645,46 @@ impl Pane for ClientPane {
             // Invalidate any cached rows on a resize
             inner.make_all_stale();
 
-            let client = Arc::clone(&self.client);
-            let remote_pane_id = self.remote_pane_id;
-            let remote_tab_id = self.remote_tab_id;
-            promise::spawn::spawn(async move {
-                client
-                    .client
-                    .resize(Resize {
-                        containing_tab_id: remote_tab_id,
-                        pane_id: remote_pane_id,
-                        size,
-                    })
-                    .await
-            })
-            .detach();
+            // Send the request now rather than from a spawned task, so
+            // that resizes reach the server in order and the GUI can wait
+            // for the reply before it paints.
+            let wait_budget = self.live_resize_wait_budget.lock().take();
+            let repaint_wait_ms = wait_budget
+                .map(|budget| (budget.as_millis() as u64).max(1))
+                .unwrap_or(0);
+            let pdu = Pdu::Resize(Resize {
+                containing_tab_id: self.remote_tab_id,
+                pane_id: self.remote_pane_id,
+                size,
+                repaint_wait_ms,
+            });
+            match self.client.client.send_pdu_now(pdu) {
+                Ok(rx) => {
+                    let reply = PendingResizeReply {
+                        rx: Some(rx),
+                        local_pane_id: self.local_pane_id,
+                    };
+                    if repaint_wait_ms > 0 {
+                        log::trace!(
+                            "live resize repaint wait: pane {} sent resize {}x{} \
+                             to remote pane {}, server budget {}ms",
+                            self.local_pane_id,
+                            size.cols,
+                            size.rows,
+                            self.remote_pane_id,
+                            repaint_wait_ms
+                        );
+                        // An older reply that nobody waited for is applied
+                        // when it arrives.
+                        self.pending_resize_reply.lock().replace(reply);
+                    }
+                    // Otherwise dropping `reply` collects the response
+                    // in the background.
+                }
+                Err(err) => {
+                    log::error!("resize pane {}: {err:#}", self.local_pane_id);
+                }
+            }
             inner.update_last_send();
         }
         Ok(())

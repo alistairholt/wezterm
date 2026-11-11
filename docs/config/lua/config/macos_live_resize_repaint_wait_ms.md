@@ -30,6 +30,11 @@ config.macos_live_resize_repaint_wait_ms = 8
 ```
 
 This works best with [front_end](front_end.md) set to `"WebGpu"`, which
-presents each live-resize step in step with the window. It applies to local
-panes only; panes in a remote [multiplexer domain](../../../multiplexing.md)
-are not waited for.
+presents each live-resize step in step with the window.
+
+For panes in a unix [multiplexer domain](../../../multiplexing.md), the
+mux server does the waiting: it resizes the pane, waits on the same signals
+with the same budget, and replies with the pane's redrawn lines. wezterm
+waits for that reply for up to the budget plus 2ms before it shows the
+step. This needs a mux server from the same build as the GUI; an older
+server refuses the connection because the protocol version changed.

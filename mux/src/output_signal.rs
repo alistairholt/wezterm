@@ -66,10 +66,11 @@ impl PaneOutputSignal {
         Arc::new(Self::default())
     }
 
-    /// Called by the parser thread after each read from the pty.
+    /// Called by the parser thread after each read from the pty. (Public
+    /// so that tests in other crates can play the parser.)
     /// Returns true if a waiter is active, in which case the parser
     /// should flush after `REPAINT_QUIET` of quiet.
-    pub(crate) fn note_read(&self) -> bool {
+    pub fn note_read(&self) -> bool {
         let mut state = self.state.lock();
         state.reads += 1;
         state.last_read.replace(Instant::now());
@@ -86,7 +87,7 @@ impl PaneOutputSignal {
     /// `pending` says whether it still holds unapplied actions;
     /// `sync_ended` says whether it applied the end of a synchronized
     /// output block since the last call.
-    pub(crate) fn note_idle(&self, pending: bool, sync_ended: bool) {
+    pub fn note_idle(&self, pending: bool, sync_ended: bool) {
         let mut state = self.state.lock();
         state.pending = pending;
         if sync_ended {

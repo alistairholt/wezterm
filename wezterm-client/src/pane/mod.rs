@@ -1,4 +1,4 @@
-pub use clientpane::ClientPane;
+pub use clientpane::{ClientPane, PendingResizeReply, ResizeReplyOutcome, RESIZE_REPLY_ALLOWANCE};
 
 mod clientpane;
 mod mousestate;
