@@ -175,6 +175,8 @@ As features stabilize some brief notes about them will accumulate here.
   `show_last_non_empty_command_output` does. Needs shell integration.
 * [RenameTab](config/lua/keyassignment/RenameTab.md) asks for a new tab
   title without needing a Lua callback, like kitty's `set_tab_title`.
+* [ToggleTabBar](config/lua/keyassignment/ToggleTabBar.md) shows or
+  hides the tab bar in a window, like iTerm's View > Show Tab Bar.
 * [CloseOtherPanes](config/lua/keyassignment/CloseOtherPanes.md) closes
   every pane in the tab except the active one, like kitty's
   `close_other_windows_in_tab`.

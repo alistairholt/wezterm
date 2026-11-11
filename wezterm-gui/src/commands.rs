@@ -880,6 +880,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Shell"],
             icon: Some("md_broadcast"),
         },
+        ToggleTabBar => CommandDef {
+            brief: "Show or Hide Tab Bar".into(),
+            doc: "Shows the tab bar if it is hidden, and hides it if it is shown".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["View"],
+            icon: Some("md_tab"),
+        },
         ToggleWindowOpacity => CommandDef {
             brief: "Toggle window transparency".into(),
             doc: "Makes a translucent window opaque, or back again. \
@@ -2298,6 +2306,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ResetFontSize,
         ResetFontAndWindowSize,
         ToggleWindowOpacity,
+        ToggleTabBar,
         ScrollByPage(NotNan::new(-1.0).unwrap()),
         ScrollByPage(NotNan::new(1.0).unwrap()),
         ScrollToTop,

@@ -590,6 +590,7 @@ pub enum KeyAssignment {
     NotifyWhenCommandFinishes,
     SaveScrollbackToFile,
     ToggleWindowOpacity,
+    ToggleTabBar,
     ToggleBroadcastInput,
     HideApplication,
     ToggleAppVisibility,
