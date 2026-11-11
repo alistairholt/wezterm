@@ -1,7 +1,8 @@
 use crate::background::{BackgroundLayer, Gradient};
 use crate::bell::{AudibleBell, EasingFunction, VisualBell};
 use crate::color::{
-    ColorSchemeFile, HsbTransform, Palette, SrgbaTuple, TabBarStyle, WindowFrameConfig,
+    ColorSchemeFile, HsbTransform, Palette, SrgbaTuple, TabBarColors, TabBarStyle,
+    WindowFrameConfig,
 };
 use crate::daemon::DaemonOptions;
 use crate::exec_domain::ExecDomain;
@@ -1469,6 +1470,23 @@ impl Config {
             cfg.resolved_palette = cfg.resolved_palette.overlay_with(colors);
         }
 
+        // With a color scheme, make the tab bar and title bar match it.
+        // Tab bar colors from the scheme or from `colors` win.
+        if cfg.color_scheme.is_some() {
+            if let (Some(bg), Some(fg)) = (
+                cfg.resolved_palette.background,
+                cfg.resolved_palette.foreground,
+            ) {
+                let derived = TabBarColors::from_scheme(bg, fg);
+                let tab_bar = match &cfg.resolved_palette.tab_bar {
+                    Some(own) => derived.overlay_with(own),
+                    None => derived,
+                };
+                cfg.window_frame.follow_tab_bar(&tab_bar);
+                cfg.resolved_palette.tab_bar = Some(tab_bar);
+            }
+        }
+
         if let Some(bg) = BackgroundLayer::with_legacy(self) {
             cfg.background.insert(0, bg);
         }
@@ -2451,5 +2469,26 @@ mod appearance_test {
         // Unknown appearance, or no scheme set for this one: use color_scheme.
         assert_eq!(scheme_for_appearance(None, &light, &dark), None);
         assert_eq!(scheme_for_appearance(Some(true), &light, &None), None);
+    }
+
+    #[test]
+    fn tab_bar_follows_scheme() {
+        use crate::color::{RgbaColor, TabBarColors, WindowFrameConfig};
+        let light_bg: RgbaColor = (0xfd, 0xf6, 0xe3).into();
+        let fg: RgbaColor = (0x65, 0x7b, 0x83).into();
+        let tab_bar = TabBarColors::from_scheme(light_bg, fg);
+        // The active tab joins the terminal; the bar stays light.
+        assert_eq!(tab_bar.active_tab().bg_color, light_bg);
+        let (_, _, l, _) = tab_bar.background().to_hsla();
+        assert!(l > 0.8, "bar lightness {l}");
+
+        // Title bar colors still at their dark defaults follow the tab
+        // bar; ones set in the config are kept.
+        let mut frame = WindowFrameConfig::default();
+        let custom: RgbaColor = (1, 2, 3).into();
+        frame.inactive_titlebar_bg = custom;
+        frame.follow_tab_bar(&tab_bar);
+        assert_eq!(frame.active_titlebar_bg, tab_bar.background());
+        assert_eq!(frame.inactive_titlebar_bg, custom);
     }
 }

@@ -146,6 +146,9 @@ As features stabilize some brief notes about them will accumulate here.
 * [color_scheme_light](config/lua/config/color_scheme_light.md) and
   [color_scheme_dark](config/lua/config/color_scheme_dark.md) pick a
   color scheme for each system appearance, and switch when macOS does.
+* With a color scheme set, the tab bar takes its colors from the scheme
+  instead of fixed dark greys, so it matches light schemes too. Colors
+  set in `colors.tab_bar` or `window_frame` still win.
 * Prompts get a green or red mark in the gutter when their command
   finishes, from the exit status shell integration reports, like
   iTerm2's marks. Click a mark to select that command's output. See

@@ -433,6 +433,47 @@ impl TabBarColors {
             .unwrap_or_else(default_inactive_tab_edge_hover)
     }
 
+    /// Tab bar colors made from a color scheme's background and
+    /// foreground, for schemes that don't set their own. The bar is a
+    /// little closer to the foreground than the terminal, and the active
+    /// tab uses the terminal's background so it joins the pane below it.
+    pub fn from_scheme(background: RgbaColor, foreground: RgbaColor) -> Self {
+        let mix = |k: f64| -> RgbaColor { background.interpolate(*foreground, k).into() };
+        let bar = mix(0.08);
+        Self {
+            background: Some(bar),
+            active_tab: Some(TabBarColor {
+                bg_color: background,
+                fg_color: foreground,
+                ..TabBarColor::default()
+            }),
+            inactive_tab: Some(TabBarColor {
+                bg_color: bar,
+                fg_color: mix(0.55),
+                ..TabBarColor::default()
+            }),
+            inactive_tab_hover: Some(TabBarColor {
+                bg_color: mix(0.14),
+                fg_color: mix(0.75),
+                italic: true,
+                ..TabBarColor::default()
+            }),
+            new_tab: Some(TabBarColor {
+                bg_color: bar,
+                fg_color: mix(0.55),
+                ..TabBarColor::default()
+            }),
+            new_tab_hover: Some(TabBarColor {
+                bg_color: mix(0.14),
+                fg_color: mix(0.75),
+                italic: true,
+                ..TabBarColor::default()
+            }),
+            inactive_tab_edge: Some(mix(0.2)),
+            inactive_tab_edge_hover: Some(mix(0.14)),
+        }
+    }
+
     pub fn overlay_with(&self, other: &Self) -> Self {
         macro_rules! overlay {
             ($name:ident) => {
@@ -612,6 +653,27 @@ pub struct WindowFrameConfig {
     pub border_right_color: Option<RgbaColor>,
     pub border_top_color: Option<RgbaColor>,
     pub border_bottom_color: Option<RgbaColor>,
+}
+
+impl WindowFrameConfig {
+    /// Uses `tab_bar`'s colors for the title bar colors that are still
+    /// at their built-in dark defaults, so the frame matches the color
+    /// scheme. Colors set in the config are kept.
+    pub fn follow_tab_bar(&mut self, tab_bar: &TabBarColors) {
+        let bg = tab_bar.background();
+        if self.active_titlebar_bg == default_active_titlebar_bg() {
+            self.active_titlebar_bg = bg;
+        }
+        if self.inactive_titlebar_bg == default_inactive_titlebar_bg() {
+            self.inactive_titlebar_bg = bg;
+        }
+        if self.active_titlebar_fg == default_active_titlebar_fg() {
+            self.active_titlebar_fg = tab_bar.active_tab().fg_color;
+        }
+        if self.inactive_titlebar_fg == default_inactive_titlebar_fg() {
+            self.inactive_titlebar_fg = tab_bar.inactive_tab().fg_color;
+        }
+    }
 }
 
 const fn default_zero_pixel() -> Dimension {
