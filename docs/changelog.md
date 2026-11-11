@@ -237,6 +237,9 @@ As features stabilize some brief notes about them will accumulate here.
   Option, Command) is now reported to apps that ask the kitty keyboard
   protocol to report all keys as escape codes. Other apps, copy mode and
   key tables don't see these presses. #5147
+* macOS 27: the native title bar of an opaque window was transparent (it
+  showed as white in dark mode). The window now has an opaque background
+  behind the title bar. #8153
 * Multiplexer: the mouse wheel was not mapped to cursor up/down keys in the
   alternate screen for panes in a `wezterm connect` domain, because the client
   always reported the alternate screen as inactive. The server now advises the

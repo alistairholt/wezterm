@@ -60,7 +60,13 @@ const NSViewLayerContentsRedrawDuringViewResize: NSInteger = 2;
 unsafe fn window_background_color(is_opaque: bool) -> id {
     let clear_color = cocoa::appkit::NSColor::clearColor(nil);
     if is_opaque {
-        clear_color
+        // On macOS 27 the native titlebar draws over the window's
+        // background color, so a clear background left it transparent
+        // (white text area in dark mode) even for an opaque window. The
+        // Metal layer covers the content area, so this color only shows
+        // in the titlebar.
+        // <https://github.com/wezterm/wezterm/issues/8153>
+        msg_send![class!(NSColor), windowBackgroundColor]
     } else {
         // An alpha of zero puts NSWindow into a special mode for irregularly
         // shaped windows, where shadows are generated from the window contents.
