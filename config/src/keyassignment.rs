@@ -575,6 +575,7 @@ pub enum KeyAssignment {
     ScrollToBottom,
     ShowTabNavigator,
     ShowDebugOverlay,
+    ShowScrollbackInPager,
     HideApplication,
     ToggleSecureKeyboardEntry,
     QuitApplication,

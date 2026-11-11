@@ -2802,6 +2802,11 @@ impl TermWindow {
                 };
                 self.show_launcher_impl(args, 0);
             }
+            ShowScrollbackInPager => {
+                if let Err(err) = self.show_scrollback_in_pager(pane) {
+                    log::error!("ShowScrollbackInPager: {err:#}");
+                }
+            }
             HideApplication => {
                 let con = Connection::get().expect("call on gui thread");
                 con.hide_application();
@@ -3658,6 +3663,65 @@ impl Drop for TermWindow {
                 fe.forget_known_window(&window);
             }
         }
+    }
+}
+
+impl TermWindow {
+    /// Write the pane's scrollback and screen, with escape sequences
+    /// for colors and attributes, to a private temporary file and open
+    /// it with `scrollback_pager` in a new tab, as the pager's standard
+    /// input. The file is removed as soon as the pager has it open.
+    fn show_scrollback_in_pager(&mut self, pane: &Arc<dyn Pane>) -> anyhow::Result<()> {
+        use std::io::Write;
+
+        anyhow::ensure!(
+            !self.config.scrollback_pager.is_empty(),
+            "scrollback_pager is empty"
+        );
+
+        let dims = pane.get_dimensions();
+        let end = dims.physical_top + dims.viewport_rows as StableRowIndex;
+        let (_first, mut lines) = pane.get_lines(dims.scrollback_top..end);
+        // Blank rows below the cursor would leave the pager showing
+        // empty space at the end.
+        while lines
+            .last()
+            .map(|line| line.as_str().trim_end().is_empty())
+            .unwrap_or(false)
+        {
+            lines.pop();
+        }
+        let text = termwiz_funcs::lines_to_escapes(lines)?;
+
+        let mut file = tempfile::Builder::new()
+            .prefix("wezterm-scrollback-")
+            .suffix(".txt")
+            .tempfile()?;
+        file.write_all(text.as_bytes())?;
+        let (_, path) = file.keep()?;
+
+        let mut args = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            // Open the file as the pager's input, then remove it, so
+            // nothing is left behind however the pager or tab ends.
+            r#"exec <"$1" && rm -f -- "$1" && shift && exec "$@""#.to_string(),
+            "sh".to_string(),
+            path.to_string_lossy().into_owned(),
+        ];
+        args.extend(self.config.scrollback_pager.iter().cloned());
+
+        self.spawn_command(
+            &SpawnCommand {
+                args: Some(args),
+                cwd: pane
+                    .get_current_working_dir(CachePolicy::AllowStale)
+                    .and_then(|url| url.to_file_path().ok()),
+                ..SpawnCommand::default()
+            },
+            SpawnWhere::NewTab,
+        );
+        Ok(())
     }
 }
 

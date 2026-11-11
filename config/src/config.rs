@@ -208,6 +208,11 @@ pub struct Config {
     )]
     pub scrollback_lines: usize,
 
+    /// The command, with arguments, that ShowScrollbackInPager runs.
+    /// It reads the scrollback, with escape sequences, on its standard input.
+    #[dynamic(default = "default_scrollback_pager")]
+    pub scrollback_pager: Vec<String>,
+
     /// If no `prog` is specified on the command line, use this
     /// instead of running the user's shell.
     /// For example, to have `wezterm` always run `top` by default,
@@ -2170,6 +2175,11 @@ pub(crate) fn validate_domain_name(name: &str) -> Result<(), String> {
 /// <https://github.com/wezterm/wezterm/issues/2630>
 fn default_macos_forward_mods() -> Modifiers {
     Modifiers::SHIFT
+}
+
+fn default_scrollback_pager() -> Vec<String> {
+    // Start at the end, keep colors, and don't wrap long lines.
+    vec!["less".into(), "+G".into(), "-R".into(), "-S".into()]
 }
 
 fn default_bell_on_tab() -> String {

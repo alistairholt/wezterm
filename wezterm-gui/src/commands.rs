@@ -797,6 +797,17 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Shell"],
             icon: Some("cod_empty_window"),
         },
+        ShowScrollbackInPager => CommandDef {
+            brief: "Show scrollback in pager".into(),
+            doc: "Opens the current pane's scrollback and screen, with \
+              colors, in a pager in a new tab. The pager is set by \
+              scrollback_pager."
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Edit"],
+            icon: Some("md_text_search"),
+        },
         ClearScrollback(ScrollbackEraseMode::ScrollbackOnly) => CommandDef {
             brief: "Clear scrollback".into(),
             doc: "Clears any text that has scrolled out of the \
@@ -2085,6 +2096,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         PasteFrom(ClipboardPasteSource::Clipboard),
         ClearScrollback(ScrollbackEraseMode::ScrollbackOnly),
         ClearScrollback(ScrollbackEraseMode::ScrollbackAndViewport),
+        ShowScrollbackInPager,
         QuickSelect,
         CharSelect(CharSelectArguments::default()),
         ActivateCopyMode,
