@@ -807,7 +807,6 @@ impl crate::TermWindow {
         font: Option<&Rc<LoadedFont>>,
         metrics: &RenderMetrics,
     ) -> anyhow::Result<Rc<Vec<ShapedInfo>>> {
-        let shape_resolve_start = Instant::now();
         let key = BorrowedShapeCacheKey {
             style,
             text: &cluster.text,
@@ -816,6 +815,11 @@ impl crate::TermWindow {
             Some(Ok(info)) => info,
             Some(Err(err)) => return Err(err),
             None => {
+                // Only misses are timed: a hit takes about 100ns, and
+                // reading the clock twice and recording the result for
+                // every cluster drawn cost more than the lookup itself.
+                // Hits are counted by shape_cache.hit.rate.
+                let shape_resolve_start = Instant::now();
                 let font = match font {
                     Some(f) => Rc::clone(f),
                     None => self.fonts.resolve_font(style)?,
@@ -846,6 +850,13 @@ impl crate::TermWindow {
                         self.shape_cache
                             .borrow_mut()
                             .put(key.to_owned(), Ok(Rc::clone(&shaped)));
+                        crate::stats::cached_histogram!("cached_cluster_shape")
+                            .record(shape_resolve_start.elapsed());
+                        log::trace!(
+                            "shape_resolve for cluster len {} -> elapsed {:?}",
+                            cluster.text.len(),
+                            shape_resolve_start.elapsed()
+                        );
                         shaped
                     }
                     Err(err) => {
@@ -860,13 +871,6 @@ impl crate::TermWindow {
                 }
             }
         };
-        crate::stats::cached_histogram!("cached_cluster_shape")
-            .record(shape_resolve_start.elapsed());
-        log::trace!(
-            "shape_resolve for cluster len {} -> elapsed {:?}",
-            cluster.text.len(),
-            shape_resolve_start.elapsed()
-        );
         Ok(glyph_info)
     }
 
