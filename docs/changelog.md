@@ -173,6 +173,9 @@ As features stabilize some brief notes about them will accumulate here.
 * [ShowLastCommandOutputInPager](config/lua/keyassignment/ShowLastCommandOutputInPager.md)
   opens the last command's output in a pager in a new tab, as kitty's
   `show_last_non_empty_command_output` does. Needs shell integration.
+* [ToggleWindowOpacity](config/lua/keyassignment/ToggleWindowOpacity.md)
+  switches a translucent window to opaque and back, as iTerm2's "Use
+  Transparency" does.
 * [SaveScrollbackToFile](config/lua/keyassignment/SaveScrollbackToFile.md)
   saves a pane's scrollback to a text file you choose, as iTerm2's "Save
   Contents" does.
