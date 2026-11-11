@@ -33,6 +33,17 @@ impl Connection {
         SPAWN_QUEUE.run();
 
         unsafe {
+            // AppKit treats command line arguments it doesn't know as files
+            // to open, so `wezterm-gui start` would deliver openFile("start")
+            // and run "start" as a script. Files opened from Finder or
+            // `open` arrive as Apple Events, which this doesn't affect.
+            let defaults: id = msg_send![class!(NSUserDefaults), standardUserDefaults];
+            let key = super::nsstring("NSTreatUnknownArgumentsAsOpen");
+            let no = super::nsstring("NO");
+            let registered: id =
+                msg_send![class!(NSDictionary), dictionaryWithObject: *no forKey: *key];
+            let () = msg_send![defaults, registerDefaults: registered];
+
             let ns_app = NSApp();
             ns_app.setActivationPolicy_(NSApplicationActivationPolicyRegular);
 
