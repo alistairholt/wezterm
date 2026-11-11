@@ -173,6 +173,9 @@ As features stabilize some brief notes about them will accumulate here.
 * [ShowLastCommandOutputInPager](config/lua/keyassignment/ShowLastCommandOutputInPager.md)
   opens the last command's output in a pager in a new tab, as kitty's
   `show_last_non_empty_command_output` does. Needs shell integration.
+* [cursor_guide_color](config/lua/config/cursor_guide_color.md) draws a
+  bar behind the cursor's row, as iTerm2's cursor guide does. Off by
+  default.
 * [macos_global_hotkey](config/lua/config/macos_global_hotkey.md) sets a
   system-wide hotkey that shows and hides WezTerm, as iTerm2's hotkey
   does. The [ToggleAppVisibility](config/lua/keyassignment/ToggleAppVisibility.md)
