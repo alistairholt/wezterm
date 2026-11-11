@@ -897,6 +897,10 @@ pub struct Config {
     #[dynamic(default = "default_true")]
     pub confirm_multiline_paste: bool,
 
+    /// Ask before pasting more than this many bytes. 0 turns it off.
+    #[dynamic(default)]
+    pub confirm_large_paste_bytes: usize,
+
     /// Badge the Dock icon with the number of tabs that have a bell
     /// you haven't seen yet.
     #[dynamic(default = "default_true")]
