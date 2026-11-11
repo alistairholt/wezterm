@@ -151,6 +151,9 @@ As features stabilize some brief notes about them will accumulate here.
   tab's title when a bell rang in that tab while you weren't looking at
   it, as kitty does. It clears when you switch to the tab. Lua's
   `TabInformation` gains `has_unseen_bell` for custom tab titles.
+* [tab_activity_symbol](config/lua/config/tab_activity_symbol.md) marks
+  tabs that printed output you haven't seen, as kitty does. Off by
+  default. `TabInformation` gains `has_unseen_output`.
 * [macos_dock_badge_on_bell](config/lua/config/macos_dock_badge_on_bell.md)
   badges the Dock icon with the number of tabs that have a bell you
   haven't seen, as Terminal.app does. On by default.
