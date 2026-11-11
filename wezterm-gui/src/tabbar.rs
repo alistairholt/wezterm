@@ -241,6 +241,11 @@ fn compute_tab_title(
                     title = format!("{}{classic_spacing}", title);
                 }
 
+                if tab.has_unseen_bell && !config.bell_on_tab.is_empty() {
+                    len += unicode_column_width(&config.bell_on_tab, None);
+                    items.push(FormatItem::Text(config.bell_on_tab.clone()));
+                }
+
                 match pane.progress {
                     Progress::None => {}
                     Progress::Percentage(pct) | Progress::Error(pct) => {

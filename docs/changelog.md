@@ -147,6 +147,10 @@ As features stabilize some brief notes about them will accumulate here.
 * [window_alert_on_bell](config/lua/config/window_alert_on_bell.md)
   bounces the Dock icon when a bell rings while WezTerm is in the
   background, as kitty does. On by default.
+* [bell_on_tab](config/lua/config/bell_on_tab.md) puts 🔔 before a
+  tab's title when a bell rang in that tab while you weren't looking at
+  it, as kitty does. It clears when you switch to the tab. Lua's
+  `TabInformation` gains `has_unseen_bell` for custom tab titles.
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.
