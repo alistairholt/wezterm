@@ -389,6 +389,8 @@ pub struct TermWindow {
     /// ToggleWindowOpacity put window_background_opacity = 1.0 into
     /// config_overrides.
     opacity_override_set: bool,
+    /// True while ToggleTabBar's config overrides are in place.
+    tab_bar_override_set: bool,
     os_parameters: Option<parameters::Parameters>,
     /// When we most recently received keyboard focus
     pub focused: Option<Instant>,
@@ -726,6 +728,7 @@ impl TermWindow {
             config: config.clone(),
             config_overrides: wezterm_dynamic::Value::default(),
             opacity_override_set: false,
+            tab_bar_override_set: false,
             palette: None,
             focused: None,
             mux_window_id,
@@ -2942,6 +2945,7 @@ impl TermWindow {
             }
             SaveScrollbackToFile => self.save_scrollback_to_file(pane),
             ToggleWindowOpacity => self.toggle_window_opacity(),
+            ToggleTabBar => self.toggle_tab_bar(),
             NotifyWhenCommandFinishes => {
                 let state = &mut self.pane_state(pane.pane_id()).notify_on_next_finish;
                 *state = !*state;
@@ -4067,6 +4071,37 @@ impl TermWindow {
         } else {
             log::info!("ToggleWindowOpacity: the window is already opaque");
             return;
+        }
+        self.config_overrides = Value::Object(overrides);
+        self.config_was_reloaded();
+    }
+
+    /// Like iTerm's View > Show/Hide Tab Bar. Hiding sets enable_tab_bar
+    /// to false; showing also turns off hide_tab_bar_if_only_one_tab so
+    /// the bar appears with one tab. The next toggle removes the
+    /// overrides and goes back to the config file's settings.
+    fn toggle_tab_bar(&mut self) {
+        use wezterm_dynamic::{Object, ToDynamic, Value};
+        const ENABLE: &str = "enable_tab_bar";
+        const HIDE_IF_ONE: &str = "hide_tab_bar_if_only_one_tab";
+
+        let mut overrides = match &self.config_overrides {
+            Value::Object(obj) => obj.clone(),
+            _ => Object::default(),
+        };
+        let enable = Value::String(ENABLE.to_string());
+        let hide_if_one = Value::String(HIDE_IF_ONE.to_string());
+        if self.tab_bar_override_set {
+            overrides.remove(&enable);
+            overrides.remove(&hide_if_one);
+            self.tab_bar_override_set = false;
+        } else if self.show_tab_bar {
+            overrides.insert(enable, false.to_dynamic());
+            self.tab_bar_override_set = true;
+        } else {
+            overrides.insert(enable, true.to_dynamic());
+            overrides.insert(hide_if_one, false.to_dynamic());
+            self.tab_bar_override_set = true;
         }
         self.config_overrides = Value::Object(overrides);
         self.config_was_reloaded();
