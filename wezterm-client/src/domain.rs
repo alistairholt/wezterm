@@ -551,9 +551,21 @@ impl ClientDomain {
                 remote_windows_to_forget.remove(&remote_window_id);
                 remote_tabs_to_forget.remove(&remote_tab_id);
 
+                // The size to lay the tab out at. For a tab we already
+                // have, keep its local size: the GUI window sets it, and the
+                // server's may be older. Every resize makes the server send
+                // TabResized, which brings us here; laying the tab out at the
+                // server's size resized our panes back and sent that older
+                // size to the server, so after a fast drag it could end up
+                // at a size from the middle of the drag.
+                let mut layout_size = root_size;
+
                 if let Some(tab_id) = inner.remote_to_local_tab_id(remote_tab_id) {
                     match mux.get_tab(tab_id) {
-                        Some(t) => tab = t,
+                        Some(t) => {
+                            layout_size = t.get_size();
+                            tab = t;
+                        }
                         None => {
                             // We likely decided that we hit EOF on the tab and
                             // removed it from the mux.  Let's add it back, but
@@ -579,7 +591,7 @@ impl ClientDomain {
 
                 log::debug!("domain: {} tree: {:#?}", inner.local_domain_id, tabroot);
                 let mut workspace = None;
-                tab.sync_with_pane_tree(root_size, tabroot, |entry| {
+                tab.sync_with_pane_tree(layout_size, tabroot, |entry| {
                     workspace.replace(entry.workspace.clone());
                     remote_panes_to_forget.remove(&entry.pane_id);
                     if let Some(pane_id) = inner.remote_to_local_pane_id(entry.pane_id) {
