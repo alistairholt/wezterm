@@ -584,6 +584,22 @@ impl Line {
             return;
         }
 
+        // A logical line made of one physical line can be scanned in
+        // place. This gives the same result as the general path below,
+        // without cloning the line and splitting it back up.
+        if let [line] = logical_line {
+            let is_cluster = matches!(&line.cells, CellStorage::C(_));
+            let seq = line.current_seqno();
+            line.invalidate_implicit_hyperlinks(seq);
+            line.scan_and_create_hyperlinks(rules);
+            #[cfg(feature = "appdata")]
+            line.clear_appdata();
+            if is_cluster {
+                line.compress_for_scrollback();
+            }
+            return;
+        }
+
         let mut logical = logical_line[0].clone();
         for line in &logical_line[1..] {
             let seqno = logical.current_seqno().max(line.current_seqno());
