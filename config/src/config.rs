@@ -872,6 +872,11 @@ pub struct Config {
     #[dynamic(default = "default_bell_on_tab")]
     pub bell_on_tab: String,
 
+    /// Ask before pasting text with a line break into a program that
+    /// hasn't turned on bracketed paste.
+    #[dynamic(default = "default_true")]
+    pub confirm_multiline_paste: bool,
+
     /// Badge the Dock icon with the number of tabs that have a bell
     /// you haven't seen yet.
     #[dynamic(default = "default_true")]

@@ -437,6 +437,10 @@ impl Pane for LocalPane {
         Ok(Some(self.pty.lock().try_clone_reader()?))
     }
 
+    fn bracketed_paste_enabled(&self) -> bool {
+        self.terminal.lock().bracketed_paste_enabled()
+    }
+
     fn send_paste(&self, text: &str) -> Result<(), Error> {
         Mux::get().record_input_for_current_identity();
         if self.tmux_domain.lock().is_some() {
