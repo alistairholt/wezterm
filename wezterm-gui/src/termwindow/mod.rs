@@ -206,6 +206,9 @@ pub struct PaneState {
     pub overlay: Option<OverlayState>,
 
     bell_start: Option<Instant>,
+    /// The command the shell integration said is running, and when it
+    /// started. Used by notify_on_command_finish.
+    command_started: Option<(Instant, String)>,
     pub mouse_terminal_coords: Option<(ClickPosition, StableRowIndex)>,
 }
 
@@ -1169,6 +1172,9 @@ impl TermWindow {
                     alert: Alert::SetUserVar { name, value },
                     pane_id,
                 } => {
+                    if name == "WEZTERM_PROG" && self.window_contains_pane(pane_id) {
+                        self.track_command_for_notification(pane_id, &value);
+                    }
                     self.emit_user_var_event(pane_id, name, value);
                 }
                 MuxNotification::WindowTitleChanged { .. }
@@ -3734,6 +3740,57 @@ impl Drop for TermWindow {
 }
 
 impl TermWindow {
+    /// The shell integration sets WEZTERM_PROG to the command line when
+    /// a command starts and clears it at the next prompt. When a command
+    /// that ran long enough finishes while you aren't looking, show a
+    /// notification, like kitty's notify_on_cmd_finish.
+    fn track_command_for_notification(&mut self, pane_id: PaneId, value: &str) {
+        use config::NotifyOnCommandFinish;
+        let mode = self.config.notify_on_command_finish;
+        if mode == NotifyOnCommandFinish::Never {
+            return;
+        }
+        if !value.is_empty() {
+            self.pane_state(pane_id)
+                .command_started
+                .replace((Instant::now(), value.to_string()));
+            return;
+        }
+        let started = self.pane_state(pane_id).command_started.take();
+        let Some((started, command)) = started else {
+            return;
+        };
+        let elapsed = started.elapsed();
+        if elapsed.as_secs_f64() < self.config.notify_on_command_finish_after_secs {
+            return;
+        }
+        let show = match mode {
+            NotifyOnCommandFinish::Never => false,
+            NotifyOnCommandFinish::Unfocused => self.focused.is_none(),
+            NotifyOnCommandFinish::Invisible => {
+                self.focused.is_none() || !self.is_pane_visible(pane_id)
+            }
+            NotifyOnCommandFinish::Always => true,
+        };
+        log::debug!(
+            "command finished in pane {pane_id} after {elapsed:?}: {command:?}; notify={show}"
+        );
+        if show {
+            let secs = elapsed.as_secs();
+            let took = if secs >= 60 {
+                format!("{}m {}s", secs / 60, secs % 60)
+            } else {
+                format!("{secs}s")
+            };
+            wezterm_toast_notification::show(wezterm_toast_notification::ToastNotification {
+                title: "Command finished".to_string(),
+                message: format!("{command} (took {took})"),
+                url: None,
+                timeout: None,
+            });
+        }
+    }
+
     /// Write the pane's scrollback and screen, with escape sequences
     /// for colors and attributes, to a private temporary file and open
     /// it with `scrollback_pager` in a new tab, as the pager's standard

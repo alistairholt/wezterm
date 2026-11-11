@@ -154,6 +154,10 @@ As features stabilize some brief notes about them will accumulate here.
 * [tab_activity_symbol](config/lua/config/tab_activity_symbol.md) marks
   tabs that printed output you haven't seen, as kitty does. Off by
   default. `TabInformation` gains `has_unseen_output`.
+* [notify_on_command_finish](config/lua/config/notify_on_command_finish.md)
+  shows a desktop notification when a long command finishes in a pane
+  you aren't looking at, as kitty does. Needs shell integration. Off by
+  default.
 * [macos_dock_badge_on_bell](config/lua/config/macos_dock_badge_on_bell.md)
   badges the Dock icon with the number of tabs that have a bell you
   haven't seen, as Terminal.app does. On by default.
