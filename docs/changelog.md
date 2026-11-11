@@ -154,6 +154,10 @@ As features stabilize some brief notes about them will accumulate here.
 * [macos_dock_badge_on_bell](config/lua/config/macos_dock_badge_on_bell.md)
   badges the Dock icon with the number of tabs that have a bell you
   haven't seen, as Terminal.app does. On by default.
+* [ShowScrollbackInPager](config/lua/keyassignment/ShowScrollbackInPager.md)
+  opens the pane's scrollback, with colors, in a pager in a new tab, like
+  kitty's `show_scrollback`. The pager is set by
+  [scrollback_pager](config/lua/config/scrollback_pager.md).
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.
