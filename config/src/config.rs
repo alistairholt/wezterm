@@ -572,6 +572,12 @@ pub struct Config {
     #[dynamic(default)]
     pub macos_window_background_blur: i64,
 
+    /// During a live window resize on macOS, how long (in milliseconds)
+    /// each resize step may wait for the active tab's programs to redraw
+    /// at the new size before the frame is presented. 0 turns this off.
+    #[dynamic(default = "default_macos_live_resize_repaint_wait_ms")]
+    pub macos_live_resize_repaint_wait_ms: u64,
+
     /// Only works on KDE Wayland
     #[dynamic(
         default,
@@ -1584,6 +1590,10 @@ fn default_command_palette_bg_color() -> RgbaColor {
 
 fn default_swallow_mouse_click_on_window_focus() -> bool {
     cfg!(target_os = "macos")
+}
+
+fn default_macos_live_resize_repaint_wait_ms() -> u64 {
+    8
 }
 
 fn default_mux_output_parser_coalesce_delay_ms() -> u64 {

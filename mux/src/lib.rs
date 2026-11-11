@@ -34,6 +34,7 @@ pub mod client;
 pub mod connui;
 pub mod domain;
 pub mod localpane;
+pub mod output_signal;
 pub mod pane;
 pub mod renderable;
 pub mod ssh;
@@ -46,6 +47,7 @@ mod tmux_pty;
 pub mod window;
 
 use crate::activity::Activity;
+use crate::output_signal::{PaneOutputSignal, REPAINT_QUIET};
 
 pub const DEFAULT_WORKSPACE: &str = "default";
 
@@ -98,6 +100,7 @@ static LAST_SUBSCRIBER_ID: AtomicUsize = AtomicUsize::new(0);
 pub struct Mux {
     tabs: RwLock<HashMap<TabId, Arc<Tab>>>,
     panes: RwLock<HashMap<PaneId, Arc<dyn Pane>>>,
+    output_signals: RwLock<HashMap<PaneId, Arc<PaneOutputSignal>>>,
     windows: RwLock<HashMap<WindowId, Window>>,
     default_domain: RwLock<Option<Arc<dyn Domain>>>,
     domains: RwLock<HashMap<DomainId, Arc<dyn Domain>>>,
@@ -135,7 +138,12 @@ fn send_actions_to_mux(pane: &Weak<dyn Pane>, dead: &Arc<AtomicBool>, actions: V
 
 /// This is the parsing loop for the given pane.
 /// It reads all data sent to `rx` (from pane PTY) and handles all terminal events for this pane.
-fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: FileDescriptor) {
+fn parse_buffered_data(
+    pane: Weak<dyn Pane>,
+    dead: &Arc<AtomicBool>,
+    mut rx: FileDescriptor,
+    signal: Arc<PaneOutputSignal>,
+) {
     let mut buf = vec![0; configuration().mux_output_parser_buffer_size];
     let mut parser = termwiz::escape::parser::Parser::new();
     let mut actions = vec![];
@@ -143,8 +151,13 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
     let mut action_size = 0;
     let mut delay = Duration::from_millis(configuration().mux_output_parser_coalesce_delay_ms);
     let mut deadline = None;
+    let mut sync_ended = false;
 
     loop {
+        // Tell any GUI waiting on a resize whether we have applied
+        // everything we parsed, before we block on the next read.
+        signal.note_idle(hold || !actions.is_empty(), std::mem::take(&mut sync_ended));
+
         match rx.read(&mut buf) {
             Ok(size) if size == 0 => {
                 dead.store(true, Ordering::Relaxed);
@@ -155,6 +168,7 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                 break;
             }
             Ok(size) => {
+                let quick_flush = signal.note_read();
                 parser.parse(&buf[0..size], |action| {
                     let mut flush = false;
                     match &action {
@@ -175,6 +189,7 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                             // => We flush out all pending actions to the terminal.
                             hold = false;
                             flush = true;
+                            sync_ended = true;
                         }
                         Action::CSI(CSI::Device(dev)) if matches!(**dev, Device::SoftReset) => {
                             // Soft reset requested
@@ -197,12 +212,19 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                     // that we coalesce a full "frame" from an unoptimized
                     // TUI program
                     if action_size < buf.len() {
-                        let poll_delay = match deadline {
-                            None => {
-                                deadline.replace(Instant::now() + delay);
-                                Some(delay)
+                        let poll_delay = if quick_flush {
+                            // The GUI is waiting for this pane to redraw
+                            // after a live resize: flush as soon as the
+                            // output goes quiet.
+                            Some(REPAINT_QUIET)
+                        } else {
+                            match deadline {
+                                None => {
+                                    deadline.replace(Instant::now() + delay);
+                                    Some(delay)
+                                }
+                                Some(target) => target.checked_duration_since(Instant::now()),
                             }
-                            Some(target) => target.checked_duration_since(Instant::now()),
                         };
                         if poll_delay.is_some() {
                             let mut pfd = [pollfd {
@@ -280,6 +302,7 @@ fn read_from_pane_pty(
     pane: Weak<dyn Pane>,
     banner: Option<String>,
     mut reader: Box<dyn std::io::Read>,
+    signal: Arc<PaneOutputSignal>,
 ) {
     let mut buf = vec![0; BUFSIZE];
 
@@ -310,7 +333,7 @@ fn read_from_pane_pty(
     // Spawn parser thread for this pane
     std::thread::spawn({
         let dead = Arc::clone(&dead);
-        move || parse_buffered_data(pane, &dead, rx)
+        move || parse_buffered_data(pane, &dead, rx, signal)
     });
 
     if let Some(banner) = banner {
@@ -441,6 +464,7 @@ impl Mux {
         Self {
             tabs: RwLock::new(HashMap::new()),
             panes: RwLock::new(HashMap::new()),
+            output_signals: RwLock::new(HashMap::new()),
             windows: RwLock::new(HashMap::new()),
             default_domain: RwLock::new(default_domain),
             domains_by_name: RwLock::new(domains_by_name),
@@ -775,6 +799,12 @@ impl Mux {
         self.tabs.read().get(&tab_id).map(Arc::clone)
     }
 
+    /// Returns the output signal for a pane whose pty output is parsed by
+    /// this mux (local panes). Remote mux panes have none.
+    pub fn pane_output_signal(&self, pane_id: PaneId) -> Option<Arc<PaneOutputSignal>> {
+        self.output_signals.read().get(&pane_id).map(Arc::clone)
+    }
+
     pub fn add_pane(&self, pane: &Arc<dyn Pane>) -> Result<(), Error> {
         if self.panes.read().contains_key(&pane.pane_id()) {
             return Ok(());
@@ -793,7 +823,11 @@ impl Mux {
         if let Some(reader) = pane.reader()? {
             let banner = self.banner.read().clone();
             let pane = Arc::downgrade(pane);
-            thread::spawn(move || read_from_pane_pty(pane, banner, reader));
+            let signal = PaneOutputSignal::new();
+            self.output_signals
+                .write()
+                .insert(pane_id, Arc::clone(&signal));
+            thread::spawn(move || read_from_pane_pty(pane, banner, reader, signal));
         }
         self.recompute_pane_count();
         self.notify(MuxNotification::PaneAdded(pane_id));
@@ -816,6 +850,7 @@ impl Mux {
     fn remove_pane_internal(&self, pane_id: PaneId) {
         log::debug!("removing pane {}", pane_id);
         let mut changed = false;
+        self.output_signals.write().remove(&pane_id);
         if let Some(pane) = self.panes.write().remove(&pane_id).clone() {
             log::debug!("killing pane {}", pane_id);
             pane.kill();

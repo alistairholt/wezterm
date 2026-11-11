@@ -37,6 +37,7 @@ clap.workspace = true
 codec.workspace = true
 colorgrad.workspace = true
 config.workspace = true
+core-graphics-types.workspace = true
 dhat = {workspace=true, optional=true}
 dirs-next.workspace = true
 downcast-rs.workspace = true
@@ -56,11 +57,13 @@ lfucache.workspace = true
 libc.workspace = true
 log.workspace = true
 luahelper.workspace = true
+metal.workspace = true
 metrics.workspace = true
 mlua = {workspace=true, features=["send", "serialize"]}
 mux-lua.workspace = true
 mux.workspace = true
 nucleo-matcher.workspace = true
+objc.workspace = true
 ordered-float.workspace = true
 parking_lot.workspace = true
 portable-pty = { workspace=true, features = ["serde_support"]}

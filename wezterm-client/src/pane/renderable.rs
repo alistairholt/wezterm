@@ -78,6 +78,10 @@ pub struct RenderableInner {
     last_input_rtt: u64,
 
     pub input_serial: InputSerial,
+
+    /// The seqno of the newest resize reply applied. Updates older than
+    /// this were queued before the reply was applied and are skipped.
+    pub resize_reply_seqno: SequenceNo,
 }
 
 pub struct RenderableState {
@@ -117,6 +121,7 @@ impl RenderableInner {
             last_input_rtt: 0,
             input_serial: InputSerial::empty(),
             seqno: SEQ_ZERO,
+            resize_reply_seqno: SEQ_ZERO,
         }
     }
 

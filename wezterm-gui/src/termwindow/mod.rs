@@ -74,6 +74,7 @@ pub mod box_model;
 pub mod charselect;
 pub mod clipboard;
 pub mod keyevent;
+pub mod metal_present;
 pub mod modal;
 mod mouseevent;
 pub mod palette;
@@ -375,6 +376,12 @@ pub struct TermWindow {
     pub dimensions: Dimensions,
     pub window_state: WindowState,
     pub resizes_pending: usize,
+    /// Whether the window is in a live resize, from the last Resized
+    /// event. WebGpu frames present in step with the window while true.
+    live_resizing: bool,
+    /// Set when a live-resize step resized the active tab's panes; the
+    /// next paint waits on it for those panes to redraw.
+    live_resize_repaint_wait: Option<resize::LiveResizeRepaintWait>,
     is_repaint_pending: bool,
     pending_scale_changes: LinkedList<resize::ScaleChange>,
     /// Terminal dimensions
@@ -706,6 +713,8 @@ impl TermWindow {
             dimensions,
             window_state: WindowState::default(),
             resizes_pending: 0,
+            live_resizing: false,
+            live_resize_repaint_wait: None,
             is_repaint_pending: false,
             pending_scale_changes: LinkedList::new(),
             terminal_size,
@@ -857,9 +866,9 @@ impl TermWindow {
         {
             let mut myself = tw.borrow_mut();
             let webgpu = match config.front_end {
-                FrontEndSelection::WebGpu => Some(Rc::new(
-                    WebGpuState::new(&window, dimensions, &config).await?,
-                )),
+                FrontEndSelection::WebGpu => {
+                    Some(Rc::new(WebGpuState::new(&window, &config).await?))
+                }
                 _ => None,
             };
             myself.config_subscription.replace(config_subscription);
@@ -1007,10 +1016,13 @@ impl TermWindow {
                 if self.resizes_pending > 0 {
                     self.is_repaint_pending = true;
                     Ok(true)
-                } else if self.webgpu.is_some() {
-                    self.do_paint_webgpu()
                 } else {
-                    Ok(self.do_paint(window))
+                    self.wait_for_live_resize_repaint();
+                    if self.webgpu.is_some() {
+                        self.do_paint_webgpu()
+                    } else {
+                        Ok(self.do_paint(window))
+                    }
                 }
             }
             WindowEvent::Notification(item) => {
@@ -1089,23 +1101,8 @@ impl TermWindow {
     }
 
     fn do_paint_webgpu(&mut self) -> anyhow::Result<bool> {
-        self.webgpu.as_mut().unwrap().resize(self.dimensions);
-        match self.do_paint_webgpu_impl() {
-            Ok(ok) => Ok(ok),
-            Err(err) => {
-                match err.downcast_ref::<wgpu::SurfaceError>() {
-                    Some(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                        self.webgpu.as_mut().unwrap().resize(self.dimensions);
-                        return self.do_paint_webgpu_impl();
-                    }
-                    _ => {}
-                }
-                Err(err)
-            }
-        }
-    }
-
-    fn do_paint_webgpu_impl(&mut self) -> anyhow::Result<bool> {
+        // The drawable is sized from self.dimensions when it is acquired
+        // (call_draw_webgpu), so there is no surface to reconfigure here.
         self.paint_impl(&mut RenderFrame::WebGpu);
         Ok(true)
     }

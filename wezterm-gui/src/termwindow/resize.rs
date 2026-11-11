@@ -2,8 +2,13 @@ use crate::resize_increment_calculator::ResizeIncrementCalculator;
 use crate::utilsprites::RenderMetrics;
 use ::window::{Dimensions, ResizeIncrement, Window, WindowOps, WindowState};
 use config::{ConfigHandle, DimensionContext};
+use mux::output_signal::{RepaintWait, RepaintWaitOutcome};
+use mux::pane::{Pane, PaneId};
 use mux::Mux;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use wezterm_client::pane::{ClientPane, ResizeReplyOutcome, RESIZE_REPLY_ALLOWANCE};
 use wezterm_font::FontConfiguration;
 use wezterm_term::TerminalSize;
 
@@ -35,6 +40,11 @@ impl super::TermWindow {
             dimensions,
             window_state,
         );
+        self.live_resizing = live_resizing;
+        if !live_resizing {
+            // A wait left over from the last live-resize step is stale.
+            self.live_resize_repaint_wait.take();
+        }
         if dimensions.pixel_width == 0 || dimensions.pixel_height == 0 {
             // on windows, this can happen when minimizing the window.
             // NOP!
@@ -53,10 +63,6 @@ impl super::TermWindow {
             self.load_os_parameters();
         }
 
-        if let Some(webgpu) = self.webgpu.as_mut() {
-            webgpu.resize(dimensions);
-        }
-
         // For simple, user-interactive resizes where the dpi doesn't change,
         // skip our scaling recalculation
         if live_resizing && self.dimensions.dpi == dimensions.dpi {
@@ -68,6 +74,19 @@ impl super::TermWindow {
             modal.reconfigure(self);
         }
         self.emit_window_event("window-resized", None);
+    }
+
+    /// Called before painting. If the last live-resize step resized the
+    /// active tab's panes, wait (within the configured budget) for them to
+    /// redraw at the new size, so the frame doesn't show their old layout.
+    pub fn wait_for_live_resize_repaint(&mut self) {
+        let Some(wait) = self.live_resize_repaint_wait.take() else {
+            return;
+        };
+        if !self.live_resizing {
+            return;
+        }
+        wait.wait();
     }
 
     pub fn apply_pending_scale_changes(&mut self) {
@@ -290,9 +309,23 @@ impl super::TermWindow {
 
         log::trace!("apply_dimensions computed size {:?}, dims {:?}", size, dims);
 
+        let cells_changed =
+            self.terminal_size.rows != size.rows || self.terminal_size.cols != size.cols;
         self.terminal_size = size;
 
         let mux = Mux::get();
+        // Mark the active tab's pane output before resizing, so the paint
+        // for this live-resize step can wait for the redraw it causes.
+        if self.live_resizing && cells_changed {
+            // Drop any wait left from the last step first: dropping it
+            // disarms remote panes, which would undo the new step's arming.
+            self.live_resize_repaint_wait.take();
+            self.live_resize_repaint_wait = LiveResizeRepaintWait::begin(
+                &mux,
+                self.mux_window_id,
+                self.config.macos_live_resize_repaint_wait_ms,
+            );
+        }
         if let Some(window) = mux.get_window(self.mux_window_id) {
             for tab in window.iter_tabs() {
                 tab.resize(size);
@@ -564,5 +597,145 @@ pub fn effective_right_padding(config: &ConfigHandle, context: DimensionContext)
         context.pixel_cell as usize
     } else {
         config.window_padding.right.evaluate_as_pixels(context) as usize
+    }
+}
+
+/// How the paint for a live-resize step waits for one pane.
+enum PaneRepaintWait {
+    /// A local pane: wait on its output signal.
+    Local(RepaintWait),
+    /// A remote mux pane: the server waits on its own output signal and
+    /// replies with the pane's changes; wait for that reply.
+    Remote(Arc<dyn Pane>),
+}
+
+/// The output marks taken for one live-resize step.
+pub struct LiveResizeRepaintWait {
+    /// When the panes were resized.
+    resized: Instant,
+    budget: Duration,
+    panes: Vec<(PaneId, PaneRepaintWait)>,
+}
+
+impl LiveResizeRepaintWait {
+    /// Take output marks for the panes of the window's active tab, and ask
+    /// unix-domain mux panes to have the server wait. Call this just before
+    /// resizing them. Returns None when the wait is turned off or no pane
+    /// can be waited for.
+    fn begin(mux: &Mux, mux_window_id: mux::window::WindowId, budget_ms: u64) -> Option<Self> {
+        if budget_ms == 0 {
+            return None;
+        }
+        let budget = Duration::from_millis(budget_ms);
+        let tab = mux.get_active_tab_for_window(mux_window_id)?;
+        let panes: Vec<_> = tab
+            .iter_panes()
+            .into_iter()
+            .filter_map(|pos| {
+                let pane_id = pos.pane.pane_id();
+                if let Some(signal) = mux.pane_output_signal(pane_id) {
+                    return Some((pane_id, PaneRepaintWait::Local(signal.begin_wait())));
+                }
+                let client_pane = pos.pane.downcast_ref::<ClientPane>()?;
+                if !client_pane.arm_live_resize_wait(budget) {
+                    return None;
+                }
+                Some((pane_id, PaneRepaintWait::Remote(Arc::clone(&pos.pane))))
+            })
+            .collect();
+        if panes.is_empty() {
+            return None;
+        }
+        Some(Self {
+            resized: Instant::now(),
+            budget,
+            panes,
+        })
+    }
+
+    /// Block until each pane has redrawn or the budget runs out.
+    fn wait(self) {
+        let start = Instant::now();
+        let deadline = self.resized + self.budget;
+        for (pane_id, wait) in &self.panes {
+            match wait {
+                PaneRepaintWait::Local(wait) => {
+                    let outcome = wait.wait(self.resized, deadline);
+                    log::trace!(
+                        "live resize repaint wait: pane {pane_id} stopped: {} after {:?} since resize",
+                        match outcome {
+                            RepaintWaitOutcome::Quiet => "quiet",
+                            RepaintWaitOutcome::SyncEnd => "sync-end",
+                            RepaintWaitOutcome::NoOutput => "no-output",
+                            RepaintWaitOutcome::Budget => "budget",
+                        },
+                        self.resized.elapsed(),
+                    );
+                }
+                PaneRepaintWait::Remote(pane) => {
+                    let Some(client_pane) = pane.downcast_ref::<ClientPane>() else {
+                        continue;
+                    };
+                    let Some(reply) = client_pane.take_live_resize_reply() else {
+                        // The pane's size didn't change, so nothing was sent.
+                        log::trace!(
+                            "live resize repaint wait: pane {pane_id} (remote) stopped: not-sent"
+                        );
+                        continue;
+                    };
+                    let outcome = reply.wait(deadline + RESIZE_REPLY_ALLOWANCE);
+                    let elapsed = self.resized.elapsed();
+                    match outcome {
+                        ResizeReplyOutcome::Applied {
+                            stopped,
+                            server_waited,
+                            lines,
+                        } => log::trace!(
+                            "live resize repaint wait: pane {pane_id} (remote) stopped: \
+                             reply applied after {elapsed:?} since resize \
+                             (server stopped: {} after {server_waited:?}, {lines} lines)",
+                            stopped.as_str(),
+                        ),
+                        ResizeReplyOutcome::Deferred {
+                            stopped,
+                            server_waited,
+                        } => log::trace!(
+                            "live resize repaint wait: pane {pane_id} (remote) stopped: \
+                             reply deferred for images after {elapsed:?} since resize \
+                             (server stopped: {} after {server_waited:?})",
+                            stopped.as_str(),
+                        ),
+                        ResizeReplyOutcome::Timeout => log::trace!(
+                            "live resize repaint wait: pane {pane_id} (remote) stopped: \
+                             budget after {elapsed:?} since resize, no reply yet"
+                        ),
+                        ResizeReplyOutcome::Failed => log::trace!(
+                            "live resize repaint wait: pane {pane_id} (remote) stopped: \
+                             failed after {elapsed:?} since resize"
+                        ),
+                    }
+                }
+            }
+        }
+        log::trace!(
+            "live resize repaint wait: blocked paint for {:?} ({} panes, budget {:?})",
+            start.elapsed(),
+            self.panes.len(),
+            self.budget,
+        );
+    }
+}
+
+impl Drop for LiveResizeRepaintWait {
+    fn drop(&mut self) {
+        // Disarm remote panes that were not waited for. Dropping a reply
+        // that arrives later applies it then.
+        for (_, wait) in &self.panes {
+            if let PaneRepaintWait::Remote(pane) = wait {
+                if let Some(client_pane) = pane.downcast_ref::<ClientPane>() {
+                    client_pane.take_live_resize_reply();
+                }
+            }
+        }
     }
 }

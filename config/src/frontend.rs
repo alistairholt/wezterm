@@ -3,8 +3,9 @@ use wezterm_dynamic::{FromDynamic, ToDynamic};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic, Default)]
 pub enum FrontEndSelection {
-    #[default]
     OpenGL,
+    /// Metal on macOS, presented through wezterm's own CAMetalLayer.
+    #[default]
     WebGpu,
     Software,
 }
@@ -53,5 +54,17 @@ pub enum WebGpuPowerPreference {
 impl Default for WebGpuPowerPreference {
     fn default() -> Self {
         Self::LowPower
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    // The fork renders through Metal (the WebGpu front end) unless the
+    // config asks for something else; OpenGL stays as a fallback.
+    #[test]
+    fn front_end_defaults_to_webgpu() {
+        assert_eq!(FrontEndSelection::default(), FrontEndSelection::WebGpu);
     }
 }
