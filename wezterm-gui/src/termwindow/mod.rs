@@ -2882,6 +2882,20 @@ impl TermWindow {
                     log::error!("ShowLastCommandOutputInPager: {err:#}");
                 }
             }
+            CopyLastCommandOutput => match last_command_output(pane) {
+                Ok(lines) => {
+                    let text = lines
+                        .iter()
+                        .map(|line| line.as_str().trim_end().to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    self.copy_to_clipboard(
+                        config::keyassignment::ClipboardCopyDestination::Clipboard,
+                        text.trim_end_matches('\n').to_string(),
+                    );
+                }
+                Err(err) => log::error!("CopyLastCommandOutput: {err:#}"),
+            },
             HideApplication => {
                 let con = Connection::get().expect("call on gui thread");
                 con.hide_application();
@@ -3813,21 +3827,8 @@ impl TermWindow {
     /// integration marks command output with OSC 133, which the
     /// terminal keeps as Output semantic zones.
     fn show_last_command_output_in_pager(&mut self, pane: &Arc<dyn Pane>) -> anyhow::Result<()> {
-        let zones = pane.get_semantic_zones()?;
-        for zone in zones.iter().rev() {
-            if zone.semantic_type != wezterm_term::SemanticType::Output {
-                continue;
-            }
-            let (_first, lines) = pane.get_lines(zone.start_y..zone.end_y + 1);
-            if lines.iter().all(|line| line.as_str().trim().is_empty()) {
-                continue;
-            }
-            return self.show_lines_in_pager(pane, lines);
-        }
-        anyhow::bail!(
-            "no command output found in pane {}; is shell integration set up?",
-            pane.pane_id()
-        )
+        let lines = last_command_output(pane)?;
+        self.show_lines_in_pager(pane, lines)
     }
 
     fn show_lines_in_pager(
@@ -3896,6 +3897,27 @@ impl TermWindow {
         .detach();
         Ok(())
     }
+}
+
+/// The lines of the newest Output semantic zone that holds non-blank
+/// text. The shell integration marks command output with OSC 133, so
+/// this leaves out the prompt and the command line.
+fn last_command_output(pane: &Arc<dyn Pane>) -> anyhow::Result<Vec<wezterm_term::Line>> {
+    let zones = pane.get_semantic_zones()?;
+    for zone in zones.iter().rev() {
+        if zone.semantic_type != wezterm_term::SemanticType::Output {
+            continue;
+        }
+        let (_first, lines) = pane.get_lines(zone.start_y..zone.end_y + 1);
+        if lines.iter().all(|line| line.as_str().trim().is_empty()) {
+            continue;
+        }
+        return Ok(lines);
+    }
+    anyhow::bail!(
+        "no command output found in pane {}; is shell integration set up?",
+        pane.pane_id()
+    )
 }
 
 thread_local! {
