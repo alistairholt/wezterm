@@ -9,7 +9,6 @@ struct MyWindow {
     allow_close: bool,
     cursor_pos: Point,
     dims: Dimensions,
-    gl: Option<Rc<glium::backend::Context>>,
 }
 
 impl Drop for MyWindow {
@@ -61,23 +60,6 @@ impl MyWindow {
                 eprintln!("{:?}", key);
                 win.set_cursor(Some(CursorIcon::Text));
             }
-            WindowEvent::NeedRepaint => {
-                if let Some(gl) = self.gl.as_mut() {
-                    if gl.is_context_lost() {
-                        eprintln!("opengl context was lost; should reinit");
-                        return;
-                    }
-
-                    let mut frame = glium::Frame::new(
-                        Rc::clone(&gl),
-                        (self.dims.pixel_width as u32, self.dims.pixel_height as u32),
-                    );
-
-                    use glium::Surface;
-                    frame.clear_color_srgb(0.25, 0.125, 0.375, 1.0);
-                    win.finish_frame(frame).unwrap();
-                }
-            }
             WindowEvent::AppearanceChanged(_)
             | WindowEvent::AdviseDeadKeyStatus(_)
             | WindowEvent::AdviseModifiersLedStatus(_, _)
@@ -89,6 +71,7 @@ impl MyWindow {
             | WindowEvent::DroppedString(_)
             | WindowEvent::PerformKeyAssignment(_)
             | WindowEvent::MouseLeave
+            | WindowEvent::NeedRepaint
             | WindowEvent::SetInnerSizeCompleted => {}
         }
     }
@@ -108,7 +91,6 @@ async fn spawn_window() -> Result<(), Box<dyn std::error::Error>> {
             pixel_height: 600,
             dpi: 0,
         },
-        gl: None,
     }));
 
     let cb_state = Rc::clone(&state);
@@ -131,9 +113,6 @@ async fn spawn_window() -> Result<(), Box<dyn std::error::Error>> {
 
     eprintln!("before show");
     win.show();
-    let gl = win.enable_opengl().await?;
-
-    state.borrow_mut().gl.replace(gl);
     win.invalidate();
     Ok(())
 }
