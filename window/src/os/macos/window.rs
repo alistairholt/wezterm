@@ -331,8 +331,11 @@ impl Window {
         } = conn.resolve_geometry(geometry);
 
         let scale_factor = (conn.default_dpi() / crate::DEFAULT_DPI) as usize;
-        let width = width / scale_factor;
-        let height = height / scale_factor;
+        // Divide the size as floats: on a 2x screen an odd pixel height
+        // (an odd row count with an odd cell height) is a half point, and
+        // integer division would round it down and lose a row.
+        let width = width as f64 / scale_factor as f64;
+        let height = height as f64 / scale_factor as f64;
         let x = x.map(|x| x / scale_factor as i32);
         let y = y.map(|y| y / scale_factor as i32);
 
@@ -346,10 +349,7 @@ impl Window {
                 config.window_decorations,
                 config.integrated_title_button_style,
             );
-            let rect = NSRect::new(
-                NSPoint::new(0., 0.),
-                NSSize::new(width as f64, height as f64),
-            );
+            let rect = NSRect::new(NSPoint::new(0., 0.), NSSize::new(width, height));
 
             let conn = Connection::get().expect("Connection::init has not been called");
 

@@ -260,6 +260,11 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* macOS: starting `wezterm-gui` with arguments, such as
+  `wezterm-gui start`, no longer opens a second window that tries to run
+  `start` as a script and closes.
+* macOS: a window whose height is an odd number of rows no longer opens
+  one row short on a Retina screen.
 * Opening a folder with WezTerm, by dropping it on the Dock icon or with
   `open -a WezTerm DIR`, now opens a window with a shell in that folder.
   Before, it typed the folder's path into a new shell as a command. A
