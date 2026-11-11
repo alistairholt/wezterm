@@ -1854,7 +1854,21 @@ impl KeyEvent {
                 // FIXME: ideally we'd get the correct unshifted key from
                 // the OS based on the current keyboard layout. That needs
                 // more plumbing, so for now, we're assuming the US layout.
-                let c = us_layout_unshift(shifted_key);
+                // Only unshift when shift is held: a key typed without it
+                // is already unshifted. A `^` typed with a dead key on an
+                // AZERTY layout was reported as `6`.
+                // <https://github.com/wezterm/wezterm/issues/4916>
+                // Letters are always reported in lower case; caps lock
+                // is reported as a modifier. normalize_shift drops SHIFT
+                // from upper case letters, so look at the raw modifiers,
+                // and without them treat an upper case letter as shifted.
+                let shift_held = raw_modifiers.contains(Modifiers::SHIFT)
+                    || (self.raw.is_none() && shifted_key.is_ascii_uppercase());
+                let c = if shift_held {
+                    us_layout_unshift(shifted_key)
+                } else {
+                    shifted_key.to_ascii_lowercase()
+                };
 
                 let base_layout = self
                     .raw
@@ -1867,11 +1881,13 @@ impl KeyEvent {
 
                 let mut key_code = format!("{}", (c as u32));
 
+                // The shifted key is only reported when shift is held.
+                let report_shifted = c != shifted_key && shift_held;
                 if flags.contains(KittyKeyboardFlags::REPORT_ALTERNATE_KEYS)
-                    && (c != shifted_key || base_layout.is_some())
+                    && (report_shifted || base_layout.is_some())
                 {
                     key_code.push(':');
-                    if c != shifted_key {
+                    if report_shifted {
                         key_code.push_str(&format!("{}", (shifted_key as u32)));
                     }
                     if let Some(base) = base_layout {
@@ -2231,6 +2247,47 @@ impl Default for UIKeyCapRendering {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    /// A key typed without shift is reported as itself, not as the US
+    /// key it would be shifted from. <https://github.com/wezterm/wezterm/issues/4916>
+    #[test]
+    fn encode_issue_4916_unshifted_caret() {
+        let key = |key, modifiers| KeyEvent {
+            key,
+            modifiers,
+            leds: KeyboardLedStatus::empty(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: None,
+        };
+        let flags = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
+            | KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+            | KittyKeyboardFlags::REPORT_ALTERNATE_KEYS;
+
+        assert_eq!(
+            key(KeyCode::Char('^'), Modifiers::NONE).encode_kitty(flags),
+            "\x1b[94;1u"
+        );
+        // With shift held on a US layout, ^ is shift+6.
+        assert_eq!(
+            key(KeyCode::Char('^'), Modifiers::SHIFT).encode_kitty(flags),
+            "\x1b[54:94;2u"
+        );
+        // Caps lock without shift: the raw event has no SHIFT, so the
+        // lower case letter is reported with no shifted alternate.
+        let mut caps = key(KeyCode::Char('A'), Modifiers::NONE);
+        caps.raw = Some(RawKeyEvent {
+            key: KeyCode::Char('a'),
+            modifiers: Modifiers::NONE,
+            leds: KeyboardLedStatus::empty(),
+            phys_code: Some(PhysKeyCode::A),
+            raw_code: 0,
+            repeat_count: 1,
+            key_is_down: true,
+            handled: Handled::new(),
+        });
+        assert_eq!(caps.encode_kitty(flags), "\x1b[97;1u");
+    }
 
     /// With "report all keys as escape codes" (flag 8), text keys must be
     /// sent as CSI u sequences, not as the text they type, with or

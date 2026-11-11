@@ -642,6 +642,24 @@ impl super::TermWindow {
             return;
         }
 
+        // A modifier key pressed or released on its own only matters to
+        // an app that asked the kitty keyboard protocol for it. Don't let
+        // it reach overlays such as copy mode (where it would cancel a
+        // pending jump) or end an `until_unknown` key table.
+        if window_key.key.is_modifier() {
+            if let Some(encoded) = self.encode_kitty_input(&pane, &window_key) {
+                if !encoded.is_empty() {
+                    if self.config.debug_key_events {
+                        log::info!("kitty: Encoded input as {:?}", encoded);
+                    }
+                    if let Err(err) = pane.writer().write_all(encoded.as_bytes()) {
+                        log::error!("sending kitty encoded data: {err:#}");
+                    }
+                }
+            }
+            return;
+        }
+
         // If we get here, then none of the keys matched
         // any key table rules. Therefore, we should pop all `until_unknown`
         // entries from the stack.

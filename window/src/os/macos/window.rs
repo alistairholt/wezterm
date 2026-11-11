@@ -9,9 +9,9 @@ use crate::os::macos::menu::{MenuItem, RepresentedItem};
 use crate::parameters::{Border, Parameters, TitleBar};
 use crate::{
     Clipboard, Connection, CursorIcon, DeadKeyStatus, Dimensions, Handled, KeyCode, KeyEvent,
-    Modifiers, MouseButtons, MouseEvent, MouseEventKind, MousePress, Point, RawKeyEvent, Rect,
-    RequestedWindowGeometry, ResizeIncrement, ResolvedGeometry, ScreenPoint, Size, ULength,
-    WindowDecorations, WindowEvent, WindowEventSender, WindowOps, WindowState,
+    Modifiers, MouseButtons, MouseEvent, MouseEventKind, MousePress, PhysKeyCode, Point,
+    RawKeyEvent, Rect, RequestedWindowGeometry, ResizeIncrement, ResolvedGeometry, ScreenPoint,
+    Size, ULength, WindowDecorations, WindowEvent, WindowEventSender, WindowOps, WindowState,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -203,6 +203,35 @@ fn ctrl_shift_dropped_shift(modifiers: Modifiers, chars: &str, unmod: &str) -> b
         }
         _ => false,
     }
+}
+
+/// For a flagsChanged event, the modifier key that went down or up and
+/// whether it is now down. `device_flags` are the event's modifierFlags,
+/// whose low bits say which side of each modifier is held (the
+/// NX_DEVICE*KEYMASK values from IOKit's IOLLEvent.h). Caps lock is left
+/// out: macOS sends one event per toggle, not a press and a release.
+fn modifier_key_transition(virtual_key: u16, device_flags: u64) -> Option<(PhysKeyCode, bool)> {
+    const LEFT_CONTROL: u64 = 0x0000_0001;
+    const LEFT_SHIFT: u64 = 0x0000_0002;
+    const RIGHT_SHIFT: u64 = 0x0000_0004;
+    const LEFT_COMMAND: u64 = 0x0000_0008;
+    const RIGHT_COMMAND: u64 = 0x0000_0010;
+    const LEFT_OPTION: u64 = 0x0000_0020;
+    const RIGHT_OPTION: u64 = 0x0000_0040;
+    const RIGHT_CONTROL: u64 = 0x0000_2000;
+
+    let (phys, mask) = match virtual_key {
+        kVK_Shift => (PhysKeyCode::LeftShift, LEFT_SHIFT),
+        kVK_RightShift => (PhysKeyCode::RightShift, RIGHT_SHIFT),
+        kVK_Control => (PhysKeyCode::LeftControl, LEFT_CONTROL),
+        kVK_RightControl => (PhysKeyCode::RightControl, RIGHT_CONTROL),
+        kVK_Option => (PhysKeyCode::LeftAlt, LEFT_OPTION),
+        kVK_RightOption => (PhysKeyCode::RightAlt, RIGHT_OPTION),
+        kVK_Command => (PhysKeyCode::LeftWindows, LEFT_COMMAND),
+        kVK_RightCommand => (PhysKeyCode::RightWindows, RIGHT_COMMAND),
+        _ => return None,
+    };
+    Some((phys, device_flags & mask != 0))
 }
 
 impl NSRange {
@@ -2793,6 +2822,50 @@ impl WindowView {
                 .events
                 .dispatch(WindowEvent::AdviseModifiersLedStatus(modifiers, leds));
         }
+
+        // Pressing or releasing a modifier key on its own only arrives
+        // here, never as keyDown/keyUp. Turn it into key events so that
+        // apps using the kitty keyboard protocol's "report all keys as
+        // escape codes" can see it.
+        // <https://github.com/wezterm/wezterm/issues/5147>
+        let virtual_key = unsafe { nsevent.keyCode() };
+        let Some((phys, key_is_down)) =
+            modifier_key_transition(virtual_key, modifier_flags.bits() as u64)
+        else {
+            return;
+        };
+        let raw_key_handled = Handled::new();
+        let raw_key_event = RawKeyEvent {
+            key: phys.to_key_code(),
+            phys_code: Some(phys),
+            raw_code: virtual_key as _,
+            leds,
+            modifiers,
+            repeat_count: 1,
+            key_is_down,
+            handled: raw_key_handled.clone(),
+        };
+        if let Some(myself) = Self::get_this(this) {
+            let mut inner = myself.inner.borrow_mut();
+            inner
+                .events
+                .dispatch(WindowEvent::RawKeyEvent(raw_key_event.clone()));
+        }
+        if raw_key_handled.is_handled() {
+            return;
+        }
+        let event = KeyEvent {
+            key: phys.to_key_code(),
+            modifiers,
+            leds,
+            repeat_count: 1,
+            key_is_down,
+            raw: Some(raw_key_event),
+        };
+        if let Some(myself) = Self::get_this(this) {
+            let mut inner = myself.inner.borrow_mut();
+            inner.events.dispatch(WindowEvent::KeyEvent(event));
+        }
     }
 
     extern "C" fn key_down(this: &mut Object, _sel: Sel, nsevent: id) {
@@ -3580,6 +3653,37 @@ mod test {
         );
         assert_eq!(frame_rate_range(0).maximum, 1.);
         assert_eq!(frame_rate_range(5000).maximum, 1000.);
+    }
+
+    /// flagsChanged events become presses and releases of the right
+    /// modifier key, using the side-specific bits of modifierFlags.
+    #[test]
+    fn modifier_keys_become_key_events() {
+        // Left shift pressed: NSEventModifierFlagShift plus the left bit.
+        assert_eq!(
+            modifier_key_transition(kVK_Shift, 0x2_0000 | 0x2),
+            Some((PhysKeyCode::LeftShift, true))
+        );
+        // Right shift released while left shift is still held.
+        assert_eq!(
+            modifier_key_transition(kVK_RightShift, 0x2_0000 | 0x2),
+            Some((PhysKeyCode::RightShift, false))
+        );
+        assert_eq!(
+            modifier_key_transition(kVK_RightControl, 0x4_0000 | 0x2000),
+            Some((PhysKeyCode::RightControl, true))
+        );
+        assert_eq!(
+            modifier_key_transition(kVK_Option, 0),
+            Some((PhysKeyCode::LeftAlt, false))
+        );
+        assert_eq!(
+            modifier_key_transition(kVK_RightCommand, 0x10_0000 | 0x10),
+            Some((PhysKeyCode::RightWindows, true))
+        );
+        // Caps lock and ordinary keys are not modifier transitions.
+        assert_eq!(modifier_key_transition(0x39, 0x1_0000), None);
+        assert_eq!(modifier_key_transition(0, 0), None);
     }
 
     /// The chars/unmod pairs here are what macOS 26 reports for a US
