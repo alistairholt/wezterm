@@ -2761,10 +2761,14 @@ impl TermWindow {
                 // Like kitty's copy_or_interrupt.
                 let text = self.selection_text(pane);
                 if text.is_empty() {
-                    pane.key_down(
-                        wezterm_term::KeyCode::Char('c'),
-                        wezterm_term::KeyModifiers::CTRL,
-                    )?;
+                    // Send it to Broadcast Input targets too, as typing
+                    // Ctrl-C would.
+                    let key = wezterm_term::KeyCode::Char('c');
+                    let mods = wezterm_term::KeyModifiers::CTRL;
+                    pane.key_down(key, mods)?;
+                    for target in self.broadcast_input_targets(pane) {
+                        target.key_down(key, mods).ok();
+                    }
                 } else {
                     self.copy_to_clipboard(
                         config::keyassignment::ClipboardCopyDestination::Clipboard,
