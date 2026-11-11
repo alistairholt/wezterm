@@ -906,6 +906,11 @@ pub struct Config {
     #[dynamic(default)]
     pub macos_secure_keyboard_entry: bool,
 
+    /// Play this instead of the system beep for the audible bell: a
+    /// system sound name such as "Glass", or the path of a sound file.
+    #[dynamic(default)]
+    pub audible_bell_sound: Option<String>,
+
     /// Draw a bar of this color behind the cursor's row in the active
     /// pane, like iTerm2's cursor guide.
     #[dynamic(default)]

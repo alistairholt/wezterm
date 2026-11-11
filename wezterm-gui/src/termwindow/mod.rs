@@ -1217,7 +1217,13 @@ impl TermWindow {
 
                     match self.config.audible_bell {
                         AudibleBell::SystemBeep => {
-                            Connection::get().expect("on main thread").beep();
+                            let played = match &self.config.audible_bell_sound {
+                                Some(sound) => ::window::os::macos::sound::play_sound(sound),
+                                None => false,
+                            };
+                            if !played {
+                                Connection::get().expect("on main thread").beep();
+                            }
                         }
                         AudibleBell::Disabled => {}
                     }
