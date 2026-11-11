@@ -862,6 +862,10 @@ pub struct Config {
     #[dynamic(default = "default_true")]
     pub window_alert_on_bell: bool,
 
+    /// Turn on Secure Keyboard Entry at startup.
+    #[dynamic(default)]
+    pub macos_secure_keyboard_entry: bool,
+
     #[dynamic(default)]
     pub canonicalize_pasted_newlines: Option<NewlineCanon>,
 

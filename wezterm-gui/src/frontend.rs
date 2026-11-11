@@ -227,6 +227,7 @@ impl GuiFrontEnd {
 
         // And build the initial menu bar.
         // TODO: arrange for this to happen on config reload.
+        crate::commands::CommandDef::apply_secure_keyboard_entry_config(&config::configuration());
         crate::commands::CommandDef::recreate_menubar(&config::configuration());
 
         Ok(front_end)
@@ -551,7 +552,9 @@ pub fn try_new() -> Result<Rc<GuiFrontEnd>, Error> {
     let config_subscription = config::subscribe_to_config_reload({
         move || {
             promise::spawn::spawn_into_main_thread(async {
-                crate::commands::CommandDef::recreate_menubar(&config::configuration());
+                let config = config::configuration();
+                crate::commands::CommandDef::apply_secure_keyboard_entry_config(&config);
+                crate::commands::CommandDef::recreate_menubar(&config);
             })
             .detach();
             true

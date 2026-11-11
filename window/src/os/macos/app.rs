@@ -142,6 +142,10 @@ extern "C" fn application_dock_menu(
     dock_menu.autorelease()
 }
 
+extern "C" fn application_did_change_active(_this: &mut Object, _sel: Sel, _notif: *mut Object) {
+    super::secure_input::sync();
+}
+
 fn get_class() -> &'static Class {
     Class::get(CLS_NAME).unwrap_or_else(|| {
         let mut cls = ClassDecl::new(CLS_NAME, class!(NSObject))
@@ -165,6 +169,14 @@ fn get_class() -> &'static Class {
             cls.add_method(
                 sel!(application:openFile:),
                 application_open_file as extern "C" fn(&mut Object, Sel, *mut Object, *mut Object),
+            );
+            cls.add_method(
+                sel!(applicationDidBecomeActive:),
+                application_did_change_active as extern "C" fn(&mut Object, Sel, *mut Object),
+            );
+            cls.add_method(
+                sel!(applicationDidResignActive:),
+                application_did_change_active as extern "C" fn(&mut Object, Sel, *mut Object),
             );
             cls.add_method(
                 sel!(applicationDockMenu:),
