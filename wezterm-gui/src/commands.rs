@@ -836,6 +836,17 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Edit"],
             icon: Some("md_text_search"),
         },
+        ShowLastCommandOutputInPager => CommandDef {
+            brief: "Show last command output in pager".into(),
+            doc: "Opens the output of the last command that printed \
+              something in the current pane, with colors, in a pager in \
+              a new tab. Needs shell integration."
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Edit"],
+            icon: Some("md_text_search"),
+        },
         ClearScrollback(ScrollbackEraseMode::ScrollbackOnly) => CommandDef {
             brief: "Clear scrollback".into(),
             doc: "Clears any text that has scrolled out of the \
@@ -2126,6 +2137,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ClearScrollback(ScrollbackEraseMode::ScrollbackOnly),
         ClearScrollback(ScrollbackEraseMode::ScrollbackAndViewport),
         ShowScrollbackInPager,
+        ShowLastCommandOutputInPager,
         QuickSelect,
         CharSelect(CharSelectArguments::default()),
         ActivateCopyMode,

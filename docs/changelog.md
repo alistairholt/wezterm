@@ -164,6 +164,9 @@ As features stabilize some brief notes about them will accumulate here.
 * [macos_dock_badge_on_bell](config/lua/config/macos_dock_badge_on_bell.md)
   badges the Dock icon with the number of tabs that have a bell you
   haven't seen, as Terminal.app does. On by default.
+* [ShowLastCommandOutputInPager](config/lua/keyassignment/ShowLastCommandOutputInPager.md)
+  opens the last command's output in a pager in a new tab, as kitty's
+  `show_last_non_empty_command_output` does. Needs shell integration.
 * [ShowScrollbackInPager](config/lua/keyassignment/ShowScrollbackInPager.md)
   opens the pane's scrollback, with colors, in a pager in a new tab, like
   kitty's `show_scrollback`. The pager is set by
