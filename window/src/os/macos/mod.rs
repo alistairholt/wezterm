@@ -10,6 +10,7 @@ mod app;
 pub mod bitmap;
 pub mod clipboard;
 pub mod connection;
+pub mod dock;
 pub mod menu;
 pub mod secure_input;
 pub mod window;
