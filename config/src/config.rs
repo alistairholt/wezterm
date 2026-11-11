@@ -872,6 +872,11 @@ pub struct Config {
     #[dynamic(default = "default_bell_on_tab")]
     pub bell_on_tab: String,
 
+    /// Text shown before a tab's title when a pane in that tab printed
+    /// output you haven't seen. Empty (the default) turns it off.
+    #[dynamic(default)]
+    pub tab_activity_symbol: String,
+
     /// Ask before pasting text with a line break into a program that
     /// hasn't turned on bracketed paste.
     #[dynamic(default = "default_true")]

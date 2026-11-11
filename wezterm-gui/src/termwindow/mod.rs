@@ -221,12 +221,14 @@ pub struct TabInformation {
     pub tab_title: String,
     pub has_unseen_bell: bool,
     pub broadcast_input: bool,
+    pub has_unseen_output: bool,
 }
 
 impl UserData for TabInformation {
     fn add_fields<'lua, F: UserDataFields<'lua, Self>>(fields: &mut F) {
         fields.add_field_method_get("has_unseen_bell", |_, this| Ok(this.has_unseen_bell));
         fields.add_field_method_get("broadcast_input", |_, this| Ok(this.broadcast_input));
+        fields.add_field_method_get("has_unseen_output", |_, this| Ok(this.has_unseen_output));
         fields.add_field_method_get("tab_id", |_, this| Ok(this.tab_id));
         fields.add_field_method_get("tab_index", |_, this| Ok(this.tab_index));
         fields.add_field_method_get("is_active", |_, this| Ok(this.is_active));
@@ -3564,6 +3566,7 @@ impl TermWindow {
                 };
 
                 TabInformation {
+                    has_unseen_output: panes.iter().any(|p| p.pane.has_unseen_output()),
                     has_unseen_bell,
                     broadcast_input,
                     tab_index: idx,
