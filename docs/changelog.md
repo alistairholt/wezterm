@@ -173,6 +173,10 @@ As features stabilize some brief notes about them will accumulate here.
 * [ShowLastCommandOutputInPager](config/lua/keyassignment/ShowLastCommandOutputInPager.md)
   opens the last command's output in a pager in a new tab, as kitty's
   `show_last_non_empty_command_output` does. Needs shell integration.
+* [MovePaneToNewTab](config/lua/keyassignment/MovePaneToNewTab.md) and
+  [MovePaneToNewWindow](config/lua/keyassignment/MovePaneToNewWindow.md)
+  move the active pane out into a tab or window of its own, as kitty's
+  `detach_window` and iTerm2's "Move Session" do.
 * [ToggleWindowOpacity](config/lua/keyassignment/ToggleWindowOpacity.md)
   switches a translucent window to opaque and back, as iTerm2's "Use
   Transparency" does.

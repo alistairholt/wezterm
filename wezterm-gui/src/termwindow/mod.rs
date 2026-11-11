@@ -2842,6 +2842,10 @@ impl TermWindow {
                     }
                 }
             }
+            MovePaneToNewTab | MovePaneToNewWindow => {
+                let new_window = matches!(assignment, MovePaneToNewWindow);
+                self.move_active_pane_out(new_window)?;
+            }
             MergeAllWindows => {
                 let mux = Mux::get();
                 let workspace = mux
@@ -3824,6 +3828,48 @@ impl TermWindow {
                 timeout: None,
             });
         }
+    }
+
+    /// Move the active pane into a tab of its own, in this window or in
+    /// a new one, like kitty's detach_window and iTerm2's Move Session.
+    fn move_active_pane_out(&mut self, new_window: bool) -> anyhow::Result<()> {
+        let mux = Mux::get();
+        let Some(pane) = self.get_active_pane_no_overlay() else {
+            return Ok(());
+        };
+        let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) else {
+            return Ok(());
+        };
+        if tab.count_panes().unwrap_or(1) <= 1 {
+            // The pane already has the tab to itself. For a new window,
+            // move the whole tab, unless it is the window's only tab.
+            if new_window {
+                let tab_count = mux
+                    .get_window(self.mux_window_id)
+                    .map(|w| w.iter_tabs().count())
+                    .unwrap_or(0);
+                if tab_count > 1 {
+                    mux.move_tab_to_window(tab.tab_id(), None)?;
+                }
+            }
+            return Ok(());
+        }
+        let pane_id = pane.pane_id();
+        let window_id = if new_window {
+            None
+        } else {
+            Some(self.mux_window_id)
+        };
+        promise::spawn::spawn(async move {
+            let mux = Mux::get();
+            if let Err(err) = mux.move_pane_to_new_tab(pane_id, window_id, None).await {
+                log::error!("failed to move pane {pane_id} to a new tab: {err:#}");
+                return;
+            }
+            mux.focus_pane_and_containing_tab(pane_id).ok();
+        })
+        .detach();
+        Ok(())
     }
 
     /// Like iTerm2's View > Use Transparency: make a translucent window

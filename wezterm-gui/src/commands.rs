@@ -719,6 +719,22 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Window"],
             icon: Some("cod_multiple_windows"),
         },
+        MovePaneToNewTab => CommandDef {
+            brief: "Move Pane to New Tab".into(),
+            doc: "Moves the active pane out into a tab of its own in this window".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Window"],
+            icon: Some("cod_split_horizontal"),
+        },
+        MovePaneToNewWindow => CommandDef {
+            brief: "Move Pane to New Window".into(),
+            doc: "Moves the active pane out into a window of its own".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Window"],
+            icon: Some("cod_multiple_windows"),
+        },
         MergeAllWindows => CommandDef {
             brief: "Merge All Windows".into(),
             doc: "Moves the tabs of every other window in this workspace \
@@ -2201,6 +2217,8 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         // ----------------- Window
         ToggleFullScreen,
         MoveTabToNewWindow,
+        MovePaneToNewTab,
+        MovePaneToNewWindow,
         MergeAllWindows,
         ToggleAlwaysOnTop,
         ToggleAlwaysOnBottom,
