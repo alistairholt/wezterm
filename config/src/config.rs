@@ -862,6 +862,11 @@ pub struct Config {
     #[dynamic(default = "default_true")]
     pub window_alert_on_bell: bool,
 
+    /// Text shown before a tab's title when a bell rang in that tab
+    /// while it wasn't the focused tab. Empty turns it off.
+    #[dynamic(default = "default_bell_on_tab")]
+    pub bell_on_tab: String,
+
     /// Turn on Secure Keyboard Entry at startup.
     #[dynamic(default)]
     pub macos_secure_keyboard_entry: bool,
@@ -2160,6 +2165,10 @@ pub(crate) fn validate_domain_name(name: &str) -> Result<(), String> {
 /// <https://github.com/wezterm/wezterm/issues/2630>
 fn default_macos_forward_mods() -> Modifiers {
     Modifiers::SHIFT
+}
+
+fn default_bell_on_tab() -> String {
+    "🔔 ".to_string()
 }
 
 fn default_colr_rasterizer() -> FontRasterizerSelection {

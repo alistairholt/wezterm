@@ -219,10 +219,12 @@ pub struct TabInformation {
     pub active_pane: Option<PaneInformation>,
     pub window_id: MuxWindowId,
     pub tab_title: String,
+    pub has_unseen_bell: bool,
 }
 
 impl UserData for TabInformation {
     fn add_fields<'lua, F: UserDataFields<'lua, Self>>(fields: &mut F) {
+        fields.add_field_method_get("has_unseen_bell", |_, this| Ok(this.has_unseen_bell));
         fields.add_field_method_get("tab_id", |_, this| Ok(this.tab_id));
         fields.add_field_method_get("tab_index", |_, this| Ok(this.tab_index));
         fields.add_field_method_get("is_active", |_, this| Ok(this.is_active));
@@ -348,6 +350,9 @@ pub struct TabState {
     /// contents, we're overlaying a little internal application
     /// tab.  We'll also route input to it.
     pub overlay: Option<OverlayState>,
+    /// A bell rang in this tab while it wasn't the focused tab.
+    /// Cleared when the tab is next shown in a focused window.
+    pub bell_pending: bool,
 }
 
 /// Manages the state/queue of lua based event handlers.
@@ -1208,6 +1213,23 @@ impl TermWindow {
 
                     let mut per_pane = self.pane_state(pane_id);
                     per_pane.bell_start.replace(Instant::now());
+                    drop(per_pane);
+
+                    // Mark the tab so the tab bar can show that a bell
+                    // rang there while you weren't looking at it.
+                    if !self.config.bell_on_tab.is_empty() {
+                        let mux = Mux::get();
+                        if let Some((_, _, tab_id)) = mux.resolve_pane_id(pane_id) {
+                            let is_active_tab = mux
+                                .get_active_tab_for_window(self.mux_window_id)
+                                .map(|tab| tab.tab_id() == tab_id)
+                                .unwrap_or(false);
+                            if !is_active_tab || self.focused.is_none() {
+                                self.tab_state(tab_id).bell_pending = true;
+                                self.update_title();
+                            }
+                        }
+                    }
                     window.invalidate();
                 }
                 MuxNotification::Alert {
@@ -3455,11 +3477,21 @@ impl TermWindow {
             .enumerate()
             .map(|(idx, tab)| {
                 let panes = self.get_pos_panes_for_tab(tab);
+                let is_active = tab_index == idx;
+
+                let has_unseen_bell = {
+                    let mut state = self.tab_state(tab.tab_id());
+                    if is_active && self.focused.is_some() {
+                        state.bell_pending = false;
+                    }
+                    state.bell_pending
+                };
 
                 TabInformation {
+                    has_unseen_bell,
                     tab_index: idx,
                     tab_id: tab.tab_id(),
-                    is_active: tab_index == idx,
+                    is_active,
                     is_last_active: window
                         .get_last_active_tab_idx()
                         .map(|last_active| last_active == idx)
