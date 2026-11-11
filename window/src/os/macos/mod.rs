@@ -11,6 +11,7 @@ pub mod bitmap;
 pub mod clipboard;
 pub mod connection;
 pub mod dock;
+pub mod global_hotkey;
 pub mod menu;
 pub mod save_panel;
 pub mod secure_input;

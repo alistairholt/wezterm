@@ -587,6 +587,7 @@ pub enum KeyAssignment {
     ToggleWindowOpacity,
     ToggleBroadcastInput,
     HideApplication,
+    ToggleAppVisibility,
     ToggleSecureKeyboardEntry,
     QuitApplication,
     SpawnCommandInNewTab(SpawnCommand),

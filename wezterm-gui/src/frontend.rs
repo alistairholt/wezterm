@@ -229,6 +229,7 @@ impl GuiFrontEnd {
         // TODO: arrange for this to happen on config reload.
         crate::commands::CommandDef::apply_secure_keyboard_entry_config(&config::configuration());
         crate::commands::CommandDef::recreate_menubar(&config::configuration());
+        apply_global_hotkey_config(&config::configuration());
 
         Ok(front_end)
     }
@@ -572,6 +573,17 @@ impl Drop for WorkspaceSwitcher {
     }
 }
 
+/// Register macos_global_hotkey, or remove it when it isn't set.
+fn apply_global_hotkey_config(config: &config::ConfigHandle) {
+    let hotkey = config
+        .macos_global_hotkey
+        .as_ref()
+        .map(|hotkey| (hotkey.key.resolve(config.key_map_preference), hotkey.mods));
+    if let Err(err) = ::window::os::macos::global_hotkey::set_global_hotkey(hotkey) {
+        log::error!("macos_global_hotkey: {err:#}");
+    }
+}
+
 pub fn shutdown() {
     FRONT_END.with(|f| drop(f.borrow_mut().take()));
 }
@@ -586,6 +598,7 @@ pub fn try_new() -> Result<Rc<GuiFrontEnd>, Error> {
                 let config = config::configuration();
                 crate::commands::CommandDef::apply_secure_keyboard_entry_config(&config);
                 crate::commands::CommandDef::recreate_menubar(&config);
+                apply_global_hotkey_config(&config);
             })
             .detach();
             true

@@ -173,6 +173,10 @@ As features stabilize some brief notes about them will accumulate here.
 * [ShowLastCommandOutputInPager](config/lua/keyassignment/ShowLastCommandOutputInPager.md)
   opens the last command's output in a pager in a new tab, as kitty's
   `show_last_non_empty_command_output` does. Needs shell integration.
+* [macos_global_hotkey](config/lua/config/macos_global_hotkey.md) sets a
+  system-wide hotkey that shows and hides WezTerm, as iTerm2's hotkey
+  does. The [ToggleAppVisibility](config/lua/keyassignment/ToggleAppVisibility.md)
+  action does the same.
 * [MovePaneToNewTab](config/lua/keyassignment/MovePaneToNewTab.md) and
   [MovePaneToNewWindow](config/lua/keyassignment/MovePaneToNewWindow.md)
   move the active pane out into a tab or window of its own, as kitty's
