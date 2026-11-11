@@ -139,6 +139,13 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* CMD-click opens the file whose path is under the mouse, like iTerm2's
+  semantic history. It reads locations such as `src/main.rs:12:5`,
+  looks up relative paths in the pane's current directory, and only acts
+  if the file exists. Set
+  [open_file_command](config/lua/config/open_file_command.md) to open
+  files in your editor at the line. See
+  [OpenFileAtMouseCursor](config/lua/keyassignment/OpenFileAtMouseCursor.md).
 * [macos_colorspace](config/lua/config/macos_colorspace.md) sets the
   color space macOS uses for WezTerm's colors. The default, `"sRGB"`,
   matches how colors already looked. `"DisplayP3"` gives more saturated

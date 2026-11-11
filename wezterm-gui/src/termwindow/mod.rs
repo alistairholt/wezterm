@@ -78,6 +78,7 @@ pub mod keyevent;
 pub mod metal_present;
 pub mod modal;
 mod mouseevent;
+mod open_file;
 pub mod palette;
 pub mod paneselect;
 mod prevcursor;
@@ -3043,6 +3044,9 @@ impl TermWindow {
             OpenLinkAtMouseCursor => {
                 self.do_open_link_at_mouse_cursor(pane);
             }
+            OpenFileAtMouseCursor => {
+                self.do_open_file_at_mouse_cursor(pane);
+            }
             EmitEvent(name) => {
                 self.emit_window_event(name, None);
             }
@@ -3429,6 +3433,77 @@ impl TermWindow {
             .detach();
         }
     }
+    /// Opens the link under the mouse cursor, or failing that, the file
+    /// whose path is the text under it.
+    fn do_open_file_at_mouse_cursor(&self, pane: &Arc<dyn Pane>) {
+        if self.current_highlight.is_some() {
+            self.do_open_link_at_mouse_cursor(pane);
+            return;
+        }
+        let Some((position, stable_row)) = self.pane_state(pane.pane_id()).mouse_terminal_coords
+        else {
+            return;
+        };
+        let Some(logical) = pane
+            .get_logical_lines(stable_row..stable_row + 1)
+            .into_iter()
+            .find(|l| l.contains_y(stable_row))
+        else {
+            return;
+        };
+        let x = logical.xy_to_logical_x(position.column, stable_row);
+        let Some((text, click)) = open_file::line_text_at(&logical.logical, x) else {
+            return;
+        };
+        let cwd = pane
+            .get_current_working_dir(mux::pane::CachePolicy::AllowStale)
+            .and_then(|url| url.to_file_path().ok());
+        let home = dirs_next::home_dir();
+        let Some(target) =
+            open_file::find_file_target(&text, click, cwd.as_deref(), home.as_deref(), |p| {
+                p.exists()
+            })
+        else {
+            log::debug!("OpenFileAtMouseCursor: no file at {x} in {text:?}");
+            return;
+        };
+        let config = &self.config;
+        let argv = open_file::build_open_command(config.open_file_command.as_deref(), &target);
+        log::info!("opening {:?} with {:?}", target, argv);
+        // The user's command runs through their login shell so that it
+        // finds programs on the PATH their shell sets up; an app started
+        // from Finder has a bare PATH.
+        let mut cmd = if config.open_file_command.is_some() {
+            let shell = portable_pty::CommandBuilder::new_default_prog().get_shell();
+            let Ok(joined) = shlex::try_join(argv.iter().map(|s| s.as_str())) else {
+                log::error!("OpenFileAtMouseCursor: can't quote {argv:?}");
+                return;
+            };
+            let mut cmd = std::process::Command::new(shell);
+            cmd.args(["-l", "-i", "-c", &joined]);
+            cmd
+        } else {
+            let mut cmd = std::process::Command::new(&argv[0]);
+            cmd.args(&argv[1..]);
+            cmd
+        };
+        if let Some(dir) = target.path.parent() {
+            cmd.current_dir(dir);
+        }
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        match cmd.spawn() {
+            Ok(mut child) => {
+                // Reap it off the main thread.
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+            Err(err) => log::error!("OpenFileAtMouseCursor: running {argv:?}: {err:#}"),
+        }
+    }
+
     fn close_current_pane(&mut self, confirm: bool) {
         let mux_window_id = self.mux_window_id;
         let mux = Mux::get();
