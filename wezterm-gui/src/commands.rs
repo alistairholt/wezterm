@@ -1744,6 +1744,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &[],
             icon: Some("cod_split_vertical"),
         },
+        BalancePanes => CommandDef {
+            brief: "Arrange Panes Evenly".into(),
+            doc: "Gives the panes in each row and column of this tab the same space".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Window", "Resize Pane"],
+            icon: Some("md_view_grid_outline"),
+        },
         AdjustPaneSize(PaneDirection::Left, amount) => CommandDef {
             brief: format!("Resize Pane {amount} cell(s) to the Left").into(),
             doc: "Adjusts the closest split divider to the left".into(),
@@ -2377,6 +2385,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ActivateWindowRelative(1),
         MoveTabRelative(-1),
         MoveTabRelative(1),
+        BalancePanes,
         AdjustPaneSize(PaneDirection::Left, 1),
         AdjustPaneSize(PaneDirection::Right, 1),
         AdjustPaneSize(PaneDirection::Up, 1),

@@ -496,6 +496,76 @@ fn apply_sizes_from_splits(tree: &Tree, size: &TerminalSize) {
     }
 }
 
+/// How many panes sit side by side across `tree` in `direction`.
+/// Splits in the other direction stack their children, so they count
+/// as wide as their widest child.
+fn panes_across(tree: &Tree, direction: SplitDirection) -> usize {
+    match tree {
+        Tree::Empty | Tree::Node { data: None, .. } => 1,
+        Tree::Leaf(_) => 1,
+        Tree::Node {
+            left,
+            right,
+            data: Some(data),
+        } => {
+            let left = panes_across(left, direction);
+            let right = panes_across(right, direction);
+            if data.direction == direction {
+                left + right
+            } else {
+                left.max(right)
+            }
+        }
+    }
+}
+
+/// Set every split in `tree`, which fills `size`, so the panes in each
+/// row and column get the same space. Each split's divider takes one
+/// cell.
+fn balance_splits(tree: &mut Tree, size: TerminalSize, cell: &TerminalSize) {
+    if let Tree::Node {
+        left,
+        right,
+        data: Some(data),
+    } = tree
+    {
+        let across_left = panes_across(left, data.direction);
+        let total_panes = across_left + panes_across(right, data.direction);
+        let extent = match data.direction {
+            SplitDirection::Horizontal => size.cols,
+            SplitDirection::Vertical => size.rows,
+        };
+        // Leave out every divider in this run of splits, share what is
+        // left equally, then add back the dividers inside the left side.
+        let content = extent.saturating_sub(total_panes - 1);
+        let first = (content * across_left / total_panes + across_left - 1)
+            .clamp(1, extent.saturating_sub(2).max(1));
+        let second = extent.saturating_sub(first + 1).max(1);
+
+        let mut first_size = size;
+        let mut second_size = size;
+        match data.direction {
+            SplitDirection::Horizontal => {
+                first_size.cols = first;
+                second_size.cols = second;
+            }
+            SplitDirection::Vertical => {
+                first_size.rows = first;
+                second_size.rows = second;
+            }
+        }
+        for part in [&mut first_size, &mut second_size] {
+            part.pixel_width = part.cols * cell.pixel_width;
+            part.pixel_height = part.rows * cell.pixel_height;
+        }
+        data.first = first_size;
+        data.second = second_size;
+
+        balance_splits(left, first_size, cell);
+        balance_splits(right, second_size, cell);
+    }
+}
+
 fn cell_dimensions(size: &TerminalSize) -> TerminalSize {
     TerminalSize {
         rows: 1,
@@ -644,6 +714,13 @@ impl Tab {
     /// by the specified amount.
     pub fn adjust_pane_size(&self, direction: PaneDirection, amount: usize) {
         self.inner.lock().adjust_pane_size(direction, amount)
+    }
+
+    /// Give the panes in each row and column the same space, like
+    /// iTerm's Arrange Split Panes Evenly. Does nothing while a pane
+    /// is zoomed.
+    pub fn balance_panes(&self) {
+        self.inner.lock().balance_panes()
     }
 
     /// Activate an adjacent pane in the specified direction.
@@ -1370,6 +1447,19 @@ impl TabInner {
                     break;
                 }
             }
+        }
+        Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
+    }
+
+    fn balance_panes(&mut self) {
+        if self.zoomed.is_some() {
+            return;
+        }
+        let size = self.size;
+        let cell = cell_dimensions(&size);
+        if let Some(tree) = self.pane.as_mut() {
+            balance_splits(tree, size, &cell);
+            apply_sizes_from_splits(tree, &size);
         }
         Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
     }

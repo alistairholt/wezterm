@@ -3133,6 +3133,14 @@ impl TermWindow {
                         });
                 }
             }
+            BalancePanes => {
+                let mux = Mux::get();
+                if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+                    if self.tab_state(tab.tab_id()).overlay.is_none() {
+                        tab.balance_panes();
+                    }
+                }
+            }
             AdjustPaneSize(direction, amount) => {
                 let mux = Mux::get();
                 let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
