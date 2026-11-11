@@ -173,6 +173,8 @@ As features stabilize some brief notes about them will accumulate here.
 * [ShowLastCommandOutputInPager](config/lua/keyassignment/ShowLastCommandOutputInPager.md)
   opens the last command's output in a pager in a new tab, as kitty's
   `show_last_non_empty_command_output` does. Needs shell integration.
+* [audible_bell_sound](config/lua/config/audible_bell_sound.md) plays a
+  system sound or a sound file for the bell, as kitty's `bell_path` does.
 * [cursor_guide_color](config/lua/config/cursor_guide_color.md) draws a
   bar behind the cursor's row, as iTerm2's cursor guide does. Off by
   default.
