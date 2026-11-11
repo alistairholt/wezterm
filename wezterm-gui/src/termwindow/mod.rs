@@ -2839,6 +2839,17 @@ impl TermWindow {
             }
             CloseCurrentTab { confirm } => self.close_current_tab(*confirm),
             CloseOtherTabs { confirm } => self.close_other_tabs(*confirm),
+            RenameTab => {
+                let mux = Mux::get();
+                if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+                    let current_title = tab.get_title();
+                    let (overlay, future) = start_overlay(self, &tab, move |tab_id, term| {
+                        crate::overlay::prompt::show_rename_tab_overlay(term, tab_id, current_title)
+                    });
+                    self.assign_overlay(tab.tab_id(), overlay);
+                    promise::spawn::spawn(future).detach();
+                }
+            }
             CloseCurrentPane { confirm } => self.close_current_pane(*confirm),
             Nop | DisableDefaultAssignment => {}
             ReloadConfiguration => config::reload(),

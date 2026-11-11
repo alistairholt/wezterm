@@ -1271,6 +1271,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &[],
             icon: Some("md_close_box_outline"),
         },
+        RenameTab => CommandDef {
+            brief: "Rename Tab...".into(),
+            doc: "Asks for a new title for the current tab".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveTab],
+            menubar: &["Shell"],
+            icon: Some("md_rename_box"),
+        },
         CloseOtherTabs { confirm: true } => CommandDef {
             brief: "Close Other Tabs".into(),
             doc: "Closes every tab in this window except the current one, \
@@ -2247,6 +2255,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         }),
         CloseCurrentTab { confirm: true },
         CloseOtherTabs { confirm: true },
+        RenameTab,
         CloseCurrentPane { confirm: true },
         DetachDomain(SpawnTabDomain::CurrentPaneDomain),
         ResetTerminal,

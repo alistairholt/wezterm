@@ -568,6 +568,7 @@ pub enum KeyAssignment {
     CloseOtherTabs {
         confirm: bool,
     },
+    RenameTab,
     ReloadConfiguration,
     MoveTabRelative(isize),
     MoveTab(usize),

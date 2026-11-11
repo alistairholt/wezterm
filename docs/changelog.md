@@ -173,6 +173,8 @@ As features stabilize some brief notes about them will accumulate here.
 * [ShowLastCommandOutputInPager](config/lua/keyassignment/ShowLastCommandOutputInPager.md)
   opens the last command's output in a pager in a new tab, as kitty's
   `show_last_non_empty_command_output` does. Needs shell integration.
+* [RenameTab](config/lua/keyassignment/RenameTab.md) asks for a new tab
+  title without needing a Lua callback, like kitty's `set_tab_title`.
 * [CloseOtherTabs](config/lua/keyassignment/CloseOtherTabs.md) closes
   every tab in the window except the active one, asking once if any of
   them would prompt, like iTerm's Close Other Tabs.
