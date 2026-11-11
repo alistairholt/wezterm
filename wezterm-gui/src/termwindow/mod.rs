@@ -220,11 +220,13 @@ pub struct TabInformation {
     pub window_id: MuxWindowId,
     pub tab_title: String,
     pub has_unseen_bell: bool,
+    pub broadcast_input: bool,
 }
 
 impl UserData for TabInformation {
     fn add_fields<'lua, F: UserDataFields<'lua, Self>>(fields: &mut F) {
         fields.add_field_method_get("has_unseen_bell", |_, this| Ok(this.has_unseen_bell));
+        fields.add_field_method_get("broadcast_input", |_, this| Ok(this.broadcast_input));
         fields.add_field_method_get("tab_id", |_, this| Ok(this.tab_id));
         fields.add_field_method_get("tab_index", |_, this| Ok(this.tab_index));
         fields.add_field_method_get("is_active", |_, this| Ok(this.is_active));
@@ -353,6 +355,8 @@ pub struct TabState {
     /// A bell rang in this tab while it wasn't the focused tab.
     /// Cleared when the tab is next shown in a focused window.
     pub bell_pending: bool,
+    /// Input to the active pane is copied to every pane in this tab.
+    pub broadcast_input: bool,
 }
 
 /// Manages the state/queue of lua based event handlers.
@@ -2756,7 +2760,12 @@ impl TermWindow {
             ActivateWindowRelativeNoWrap(n) => {
                 self.activate_window_relative(*n, false)?;
             }
-            SendString(s) => pane.writer().write_all(s.as_bytes())?,
+            SendString(s) => {
+                pane.writer().write_all(s.as_bytes())?;
+                for target in self.broadcast_input_targets(pane) {
+                    target.writer().write_all(s.as_bytes()).ok();
+                }
+            }
             SendKey(key) => {
                 use keyevent::Key;
                 let mods = key.mods;
@@ -2764,6 +2773,9 @@ impl TermWindow {
                     &key.key.resolve(self.config.key_map_preference),
                 ) {
                     pane.key_down(key, mods)?;
+                    for target in self.broadcast_input_targets(pane) {
+                        target.key_down(key, mods).ok();
+                    }
                 }
             }
             Hide => {
@@ -2801,6 +2813,14 @@ impl TermWindow {
                     alphabet: args.alphabet.clone(),
                 };
                 self.show_launcher_impl(args, 0);
+            }
+            ToggleBroadcastInput => {
+                if let Some(tab) = Mux::get().get_active_tab_for_window(self.mux_window_id) {
+                    let mut state = self.tab_state(tab.tab_id());
+                    state.broadcast_input = !state.broadcast_input;
+                    drop(state);
+                    self.update_title();
+                }
             }
             ShowScrollbackInPager => {
                 if let Err(err) = self.show_scrollback_in_pager(pane) {
@@ -3492,6 +3512,7 @@ impl TermWindow {
                 let panes = self.get_pos_panes_for_tab(tab);
                 let is_active = tab_index == idx;
 
+                let broadcast_input = self.tab_state(tab.tab_id()).broadcast_input;
                 let has_unseen_bell = {
                     let mut state = self.tab_state(tab.tab_id());
                     if is_active && self.focused.is_some() {
@@ -3502,6 +3523,7 @@ impl TermWindow {
 
                 TabInformation {
                     has_unseen_bell,
+                    broadcast_input,
                     tab_index: idx,
                     tab_id: tab.tab_id(),
                     is_active,
