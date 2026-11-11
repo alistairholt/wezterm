@@ -173,6 +173,9 @@ As features stabilize some brief notes about them will accumulate here.
 * [ShowLastCommandOutputInPager](config/lua/keyassignment/ShowLastCommandOutputInPager.md)
   opens the last command's output in a pager in a new tab, as kitty's
   `show_last_non_empty_command_output` does. Needs shell integration.
+* [ToggleMaximize](config/lua/keyassignment/ToggleMaximize.md) switches
+  the window between filling the screen and its previous size, as kitty's
+  `toggle_maximized` does. It is in the Window menu as "Zoom".
 * [CopyOrInterrupt](config/lua/keyassignment/CopyOrInterrupt.md) copies
   the selection if there is one and otherwise sends Ctrl-C, as kitty's
   `copy_or_interrupt` does.

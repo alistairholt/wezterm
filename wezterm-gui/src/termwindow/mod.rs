@@ -2714,6 +2714,15 @@ impl TermWindow {
             ToggleFullScreen => {
                 self.window.as_ref().unwrap().toggle_fullscreen();
             }
+            ToggleMaximize => {
+                // Like kitty's toggle_maximized and the Zoom button.
+                let window = self.window.as_ref().unwrap();
+                if self.window_state.contains(WindowState::MAXIMIZED) {
+                    window.restore();
+                } else {
+                    window.maximize();
+                }
+            }
             ToggleAlwaysOnTop => {
                 let window = self.window.clone().unwrap();
                 let current_level = self.window_state.as_window_level();
