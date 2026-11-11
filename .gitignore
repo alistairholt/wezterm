@@ -55,3 +55,4 @@ dhat-heap.json
 /__pycache__/
 /nix/result
 *.qcow2
+.kata.local.toml
