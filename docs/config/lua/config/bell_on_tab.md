@@ -21,7 +21,9 @@ config.bell_on_tab = ''
 It only applies to the default tab titles. If you set titles yourself
 with the [format-tab-title](../window-events/format-tab-title.md)
 event, check `tab.has_unseen_bell` from
-[TabInformation](../TabInformation.md) instead.
+[TabInformation](../TabInformation.md) instead. That field is set even
+when `bell_on_tab` is empty.
 
-See also [window_alert_on_bell](window_alert_on_bell.md),
+See also [macos_dock_badge_on_bell](macos_dock_badge_on_bell.md),
+[window_alert_on_bell](window_alert_on_bell.md),
 [audible_bell](audible_bell.md) and [visual_bell](visual_bell.md).

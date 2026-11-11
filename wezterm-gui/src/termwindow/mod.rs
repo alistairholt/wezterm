@@ -1217,7 +1217,7 @@ impl TermWindow {
 
                     // Mark the tab so the tab bar can show that a bell
                     // rang there while you weren't looking at it.
-                    if !self.config.bell_on_tab.is_empty() {
+                    {
                         let mux = Mux::get();
                         if let Some((_, _, tab_id)) = mux.resolve_pane_id(pane_id) {
                             let is_active_tab = mux
@@ -1961,6 +1961,14 @@ impl TermWindow {
             _ => return,
         };
         let tabs = self.get_tab_information();
+        set_unseen_bell_count(
+            self.mux_window_id,
+            if self.config.macos_dock_badge_on_bell {
+                tabs.iter().filter(|t| t.has_unseen_bell).count()
+            } else {
+                0
+            },
+        );
         let panes = self.get_pane_information();
         let active_tab = tabs.iter().find(|t| t.is_active).cloned();
         let active_pane = panes.iter().find(|p| p.is_active).cloned();
@@ -3644,10 +3652,39 @@ impl Drop for TermWindow {
         // (will actually unsubscribe on the next notif from mux)
         self.mux_subscription_dead.store(true, Ordering::Relaxed);
         self.clear_all_overlays();
+        set_unseen_bell_count(self.mux_window_id, 0);
         if let Some(window) = self.window.take() {
             if let Some(fe) = try_front_end() {
                 fe.forget_known_window(&window);
             }
         }
     }
+}
+
+thread_local! {
+    /// Per window, the number of tabs with a bell you haven't seen,
+    /// plus the total last shown on the Dock icon.
+    static UNSEEN_BELLS: RefCell<(HashMap<MuxWindowId, usize>, usize)> =
+        RefCell::new((HashMap::new(), 0));
+}
+
+/// Record how many tabs in a window have an unseen bell and update
+/// the Dock badge when the total across all windows changes.
+fn set_unseen_bell_count(window_id: MuxWindowId, count: usize) {
+    UNSEEN_BELLS.with(|cell| {
+        let mut state = cell.borrow_mut();
+        let (per_window, shown) = &mut *state;
+        if count == 0 {
+            per_window.remove(&window_id);
+        } else {
+            per_window.insert(window_id, count);
+        }
+        let total: usize = per_window.values().sum();
+        if total != *shown {
+            *shown = total;
+            log::debug!("tabs with an unseen bell: {total}; updating the Dock badge");
+            let label = total.to_string();
+            ::window::os::macos::dock::set_dock_badge((total > 0).then_some(label.as_str()));
+        }
+    });
 }

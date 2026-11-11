@@ -151,6 +151,9 @@ As features stabilize some brief notes about them will accumulate here.
   tab's title when a bell rang in that tab while you weren't looking at
   it, as kitty does. It clears when you switch to the tab. Lua's
   `TabInformation` gains `has_unseen_bell` for custom tab titles.
+* [macos_dock_badge_on_bell](config/lua/config/macos_dock_badge_on_bell.md)
+  badges the Dock icon with the number of tabs that have a bell you
+  haven't seen, as Terminal.app does. On by default.
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.

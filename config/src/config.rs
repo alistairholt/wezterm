@@ -867,6 +867,11 @@ pub struct Config {
     #[dynamic(default = "default_bell_on_tab")]
     pub bell_on_tab: String,
 
+    /// Badge the Dock icon with the number of tabs that have a bell
+    /// you haven't seen yet.
+    #[dynamic(default = "default_true")]
+    pub macos_dock_badge_on_bell: bool,
+
     /// Turn on Secure Keyboard Entry at startup.
     #[dynamic(default)]
     pub macos_secure_keyboard_entry: bool,
