@@ -58,8 +58,11 @@ As features stabilize some brief notes about them will accumulate here.
 * macOS: with `front_end = "WebGpu"`, wezterm presents Metal frames into its
   own layer, in step with live window resizes, so the window no longer
   stretches or squeezes its content while you drag an edge or corner.
-* macOS: [front_end](config/lua/config/front_end.md) now defaults to
-  `"WebGpu"` (Metal). `front_end = "OpenGL"` still works as a fallback.
+* macOS: wezterm always renders with Metal (the `"WebGpu"` front end). The
+  OpenGL renderer has been removed, along with CGL, EGL and the non-Metal
+  wgpu backends. [front_end](config/lua/config/front_end.md) and
+  [prefer_egl](config/lua/config/prefer_egl.md) are still accepted, so
+  existing configs load, but they are ignored.
 * This fork is now macOS-only. Windows, X11 and Wayland support, WSL
   domains, the fontconfig and GDI font locators, and the Linux and Windows
   packages and CI builds have been removed.

@@ -345,6 +345,8 @@ pub struct Config {
     #[dynamic(default = "default_harfbuzz_features")]
     pub harfbuzz_features: Vec<String>,
 
+    /// Accepted so that old configs load, but ignored: this fork always
+    /// renders with Metal.
     #[dynamic(default)]
     pub front_end: FrontEndSelection,
 
@@ -530,10 +532,8 @@ pub struct Config {
     #[dynamic(default)]
     pub enable_zwlr_output_manager: bool,
 
-    /// Whether to prefer EGL over other GL implementations.
-    /// EGL on Windows has jankier resize behavior than WGL (which
-    /// is used if EGL is unavailable), but EGL survives graphics
-    /// driver updates without breaking and losing your work.
+    /// Accepted so that old configs load, but ignored: this fork
+    /// doesn't use EGL or OpenGL.
     #[dynamic(default = "default_prefer_egl")]
     pub prefer_egl: bool,
 
