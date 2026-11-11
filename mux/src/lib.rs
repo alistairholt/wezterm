@@ -1044,6 +1044,103 @@ impl Mux {
         Ok(())
     }
 
+    /// Move a tab into another window, or into a new window in the same
+    /// workspace when `window_id` is None, and make it that window's
+    /// active tab. Returns the window it ends up in. A window left with
+    /// no tabs is closed.
+    pub fn move_tab_to_window(
+        &self,
+        tab_id: TabId,
+        window_id: Option<WindowId>,
+    ) -> anyhow::Result<WindowId> {
+        let src_window_id = self
+            .window_containing_tab(tab_id)
+            .ok_or_else(|| anyhow!("move_tab_to_window: tab {tab_id} is not in a window"))?;
+        if window_id == Some(src_window_id) {
+            return Ok(src_window_id);
+        }
+        let tab = self
+            .get_tab(tab_id)
+            .ok_or_else(|| anyhow!("move_tab_to_window: no such tab {tab_id}"))?;
+
+        // Keep the builder alive until the tab is in the new window, so
+        // the GUI doesn't see an empty window and close it.
+        let window_builder;
+        let dest_window_id = match window_id {
+            Some(id) => id,
+            None => {
+                let workspace = self
+                    .get_window(src_window_id)
+                    .map(|w| w.get_workspace().to_string());
+                window_builder = self.new_empty_window(workspace, None);
+                *window_builder
+            }
+        };
+
+        self.get_window_mut(src_window_id)
+            .ok_or_else(|| anyhow!("move_tab_to_window: no window {src_window_id}"))?
+            .remove_tab_id(tab_id);
+        self.add_tab_to_window(&tab, dest_window_id)?;
+        if let Some(mut window) = self.get_window_mut(dest_window_id) {
+            if let Some(idx) = window.get_tab_idx_for_id(tab_id) {
+                window.remember_and_set_active_tab_idx(idx);
+            }
+        }
+        self.notify(MuxNotification::WindowInvalidated(src_window_id));
+        self.prune_dead_windows();
+        Ok(dest_window_id)
+    }
+
+    /// Take a tab out of its window without killing its panes, so that
+    /// `restore_tab_to_window` can put it back (Undo Close Tab). Returns
+    /// the window and the index the tab had. The caller must later
+    /// restore the tab or `remove_tab` it.
+    pub fn detach_tab_from_window(&self, tab_id: TabId) -> anyhow::Result<(WindowId, usize)> {
+        let window_id = self
+            .window_containing_tab(tab_id)
+            .ok_or_else(|| anyhow!("detach_tab_from_window: tab {tab_id} is not in a window"))?;
+        let idx = {
+            let mut window = self
+                .get_window_mut(window_id)
+                .ok_or_else(|| anyhow!("detach_tab_from_window: no window {window_id}"))?;
+            let idx = window
+                .get_tab_idx_for_id(tab_id)
+                .ok_or_else(|| anyhow!("detach_tab_from_window: tab {tab_id} not found"))?;
+            window.remove_tab_idx(idx);
+            idx
+        };
+        self.recompute_pane_count();
+        self.prune_dead_windows();
+        Ok((window_id, idx))
+    }
+
+    /// Put a tab taken out by `detach_tab_from_window` back into a
+    /// window at `idx` (or at the end if there are fewer tabs now), and
+    /// make it the active tab.
+    pub fn restore_tab_to_window(
+        &self,
+        tab_id: TabId,
+        window_id: WindowId,
+        idx: usize,
+    ) -> anyhow::Result<()> {
+        let tab = self
+            .get_tab(tab_id)
+            .ok_or_else(|| anyhow!("restore_tab_to_window: no such tab {tab_id}"))?;
+        if self.window_containing_tab(tab_id).is_some() {
+            anyhow::bail!("restore_tab_to_window: tab {tab_id} is already in a window");
+        }
+        {
+            let mut window = self
+                .get_window_mut(window_id)
+                .ok_or_else(|| anyhow!("restore_tab_to_window: no window {window_id}"))?;
+            let idx = idx.min(window.count_tabs());
+            window.insert_tab_and_activate(idx, &tab);
+        }
+        self.recompute_pane_count();
+        self.notify(MuxNotification::TabAddedToWindow { tab_id, window_id });
+        Ok(())
+    }
+
     /// Returns the ID of the window containing the given tab ID, if any.
     pub fn window_containing_tab(&self, tab_id: TabId) -> Option<WindowId> {
         for w in self.windows.read().values() {

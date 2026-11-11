@@ -19,14 +19,13 @@ possible values:
     The default has been reverted to `"OpenGL"`.
 
 {{since('nightly', outline=true)}}
-    On this macOS-only fork the default is `"WebGpu"` (Metal). Set
-    `front_end = "OpenGL"` to go back to the OpenGL renderer.
+    This macOS-only fork always renders with Metal (`"WebGpu"`). The
+    OpenGL and Software renderers have been removed. The option is still
+    accepted so that existing configs load, but its value is ignored.
 
-You may wish (or need!) to select `Software` if there are issues with your
-GPU/OpenGL drivers.
-
-WezTerm will automatically select `Software` if it detects that it is
-being started in a Remote Desktop environment on Windows.
+In upstream wezterm you may wish (or need!) to select `Software` if there
+are issues with your GPU/OpenGL drivers. That choice doesn't exist on this
+fork.
 
 ## WebGpu
 

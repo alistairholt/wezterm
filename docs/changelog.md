@@ -22,6 +22,44 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* The default [hyperlink_rules](config/lua/config/hyperlink_rules.md) no
+  longer use `\b` or a lookahead, so they run in the fast regex engine
+  instead of the backtracking one. They find the same links, and scanning
+  changed lines for links takes far less time per frame while output
+  scrolls. If you copied the old defaults into your config, consider
+  updating them from `wezterm.default_hyperlink_rules()`.
+* macOS: with `front_end = "WebGpu"`, drawing a frame takes about 0.15ms
+  instead of about 1ms of CPU: vertices are written straight into memory
+  the GPU reads, and the whole frame is drawn in one render pass.
+* Each changed line on screen is hashed (to look it up in the shaping
+  caches) about 3 times faster, which cuts main thread CPU time while
+  output scrolls or a full-screen program redraws.
+* The cache of drawn lines stores each line's quads in one block instead of
+  allocating every glyph separately, saving about 30ms of CPU per second
+  while output scrolls.
+* Internal performance counters (cache hit rates and timings) no longer
+  read the clock or look up their handle on every cache lookup, saving
+  about 12ms of main thread CPU per second while output scrolls.
+* Checking a changed line for [hyperlink rules](config/lua/config/hyperlink_rules.md)
+  no longer copies the line first when it fits on one row, cutting that
+  check from about 35ms to 4ms of main thread CPU per second when a
+  full-screen program redraws.
+* The GUI's least-frequently-used caches no longer re-sort an entry on
+  every hit; entries are re-sorted only when the cache needs to evict one.
+  This saves about 6ms of main thread CPU per second while output scrolls.
+* Working out whether a cell should be drawn as an emoji now skips the
+  emoji tables for plain ASCII cells, saving about 10ms of main thread CPU
+  per second when a full-screen program redraws.
+* Lines drawn from the line quad cache are now written straight into the
+  GPU vertex buffer instead of being built on the stack and copied in,
+  saving about 15ms of main thread CPU per second when a full-screen
+  program redraws.
+* macOS: painting is paced by the window's display link instead of a
+  [max_fps](config/lua/config/max_fps.md) timer. Frames now follow the
+  display's refresh, up to `max_fps`, which now defaults to `120` (was
+  `60`), so ProMotion displays get 120Hz and 60Hz displays are unchanged.
+  The timer topped out at about 60 frames per second. An idle window
+  doesn't paint at all.
 * macOS: during a live window resize, each step now waits briefly (up to
   [macos_live_resize_repaint_wait_ms](config/lua/config/macos_live_resize_repaint_wait_ms.md),
   default 8ms) for full-screen programs in the active tab to redraw at the
@@ -33,8 +71,11 @@ As features stabilize some brief notes about them will accumulate here.
 * macOS: with `front_end = "WebGpu"`, wezterm presents Metal frames into its
   own layer, in step with live window resizes, so the window no longer
   stretches or squeezes its content while you drag an edge or corner.
-* macOS: [front_end](config/lua/config/front_end.md) now defaults to
-  `"WebGpu"` (Metal). `front_end = "OpenGL"` still works as a fallback.
+* macOS: wezterm always renders with Metal (the `"WebGpu"` front end). The
+  OpenGL renderer has been removed, along with CGL, EGL and the non-Metal
+  wgpu backends. [front_end](config/lua/config/front_end.md) and
+  [prefer_egl](config/lua/config/prefer_egl.md) are still accepted, so
+  existing configs load, but they are ignored.
 * This fork is now macOS-only. Windows, X11 and Wayland support, WSL
   domains, the fontconfig and GDI font locators, and the Linux and Windows
   packages and CI builds have been removed.
@@ -98,6 +139,114 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* macOS: Secure Keyboard Entry, as in Terminal.app and iTerm2. Turn it on
+  from the WezTerm menu, with
+  [ToggleSecureKeyboardEntry](config/lua/keyassignment/ToggleSecureKeyboardEntry.md),
+  or at startup with
+  [macos_secure_keyboard_entry](config/lua/config/macos_secure_keyboard_entry.md).
+* [window_alert_on_bell](config/lua/config/window_alert_on_bell.md)
+  bounces the Dock icon when a bell rings while WezTerm is in the
+  background, as kitty does. On by default.
+* [bell_on_tab](config/lua/config/bell_on_tab.md) puts 🔔 before a
+  tab's title when a bell rang in that tab while you weren't looking at
+  it, as kitty does. It clears when you switch to the tab. Lua's
+  `TabInformation` gains `has_unseen_bell` for custom tab titles.
+* [tab_activity_symbol](config/lua/config/tab_activity_symbol.md) marks
+  tabs that printed output you haven't seen, as kitty does. Off by
+  default. `TabInformation` gains `has_unseen_output`.
+* [notify_on_command_finish](config/lua/config/notify_on_command_finish.md)
+  shows a desktop notification when a long command finishes in a pane
+  you aren't looking at, as kitty does. Needs shell integration. Off by
+  default.
+* [NotifyWhenCommandFinishes](config/lua/keyassignment/NotifyWhenCommandFinishes.md)
+  notifies you once when the current command finishes, as iTerm2's
+  "Alert on Next Mark" does. Needs shell integration.
+* [remember_window_size](config/lua/config/remember_window_size.md)
+  opens new windows at the size of the last window you resized, as
+  kitty does. Off by default.
+* [macos_dock_badge_on_bell](config/lua/config/macos_dock_badge_on_bell.md)
+  badges the Dock icon with the number of tabs that have a bell you
+  haven't seen, as Terminal.app does. On by default.
+* [FindCursor](config/lua/keyassignment/FindCursor.md), bound to `CMD-/`,
+  briefly draws a crosshair through the cursor, as iTerm2's "Find
+  Cursor" does.
+* [SelectLastCommandOutput](config/lua/keyassignment/SelectLastCommandOutput.md),
+  bound to `CMD-SHIFT-a`, selects the last command's output and scrolls
+  to it, as iTerm2's "Select Output of Last Command" does. Needs shell
+  integration.
+* [CopyLastCommandOutput](config/lua/keyassignment/CopyLastCommandOutput.md)
+  copies the last command's output to the clipboard, as iTerm2's "Copy
+  Output of Last Command" does. Needs shell integration.
+* [ShowLastCommandOutputInPager](config/lua/keyassignment/ShowLastCommandOutputInPager.md)
+  opens the last command's output in a pager in a new tab, as kitty's
+  `show_last_non_empty_command_output` does. Needs shell integration.
+* [UndoCloseTab](config/lua/keyassignment/UndoCloseTab.md) brings back a
+  tab closed in the last
+  [undo_close_tab_seconds](config/lua/config/undo_close_tab_seconds.md)
+  (5 by default), as iTerm2 does. A closed tab's programs now keep
+  running until that time is up.
+* [RenameTab](config/lua/keyassignment/RenameTab.md) asks for a new tab
+  title without needing a Lua callback, like kitty's `set_tab_title`.
+* [MovePaneToTab](config/lua/keyassignment/MovePaneToTab.md) moves the
+  active pane into another tab, beside that tab's active pane.
+* [BalancePanes](config/lua/keyassignment/BalancePanes.md) gives the
+  panes in each row and column of a tab the same space, like iTerm's
+  Arrange Split Panes Evenly.
+* [ToggleTabBar](config/lua/keyassignment/ToggleTabBar.md) shows or
+  hides the tab bar in a window, like iTerm's View > Show Tab Bar.
+* [CloseOtherPanes](config/lua/keyassignment/CloseOtherPanes.md) closes
+  every pane in the tab except the active one, like kitty's
+  `close_other_windows_in_tab`.
+* [CloseOtherTabs](config/lua/keyassignment/CloseOtherTabs.md) closes
+  every tab in the window except the active one, asking once if any of
+  them would prompt, like iTerm's Close Other Tabs.
+* [SelectAll](config/lua/keyassignment/SelectAll.md), bound to
+  `CMD-a` and in the Edit menu, selects the whole scrollback and screen,
+  as iTerm's Select All does.
+* [ToggleMaximize](config/lua/keyassignment/ToggleMaximize.md) switches
+  the window between filling the screen and its previous size, as kitty's
+  `toggle_maximized` does. It is in the Window menu as "Zoom".
+* [CopyOrInterrupt](config/lua/keyassignment/CopyOrInterrupt.md) copies
+  the selection if there is one and otherwise sends Ctrl-C, as kitty's
+  `copy_or_interrupt` does.
+* [confirm_large_paste_bytes](config/lua/config/confirm_large_paste_bytes.md)
+  asks before a paste larger than the given size, as kitty's
+  `confirm-if-large` does. Off by default.
+* [audible_bell_sound](config/lua/config/audible_bell_sound.md) plays a
+  system sound or a sound file for the bell, as kitty's `bell_path` does.
+* [cursor_guide_color](config/lua/config/cursor_guide_color.md) draws a
+  bar behind the cursor's row, as iTerm2's cursor guide does. Off by
+  default.
+* [macos_global_hotkey](config/lua/config/macos_global_hotkey.md) sets a
+  system-wide hotkey that shows and hides WezTerm, as iTerm2's hotkey
+  does. The [ToggleAppVisibility](config/lua/keyassignment/ToggleAppVisibility.md)
+  action does the same.
+* [MovePaneToNewTab](config/lua/keyassignment/MovePaneToNewTab.md) and
+  [MovePaneToNewWindow](config/lua/keyassignment/MovePaneToNewWindow.md)
+  move the active pane out into a tab or window of its own, as kitty's
+  `detach_window` and iTerm2's "Move Session" do.
+* [ToggleWindowOpacity](config/lua/keyassignment/ToggleWindowOpacity.md)
+  switches a translucent window to opaque and back, as iTerm2's "Use
+  Transparency" does.
+* [SaveScrollbackToFile](config/lua/keyassignment/SaveScrollbackToFile.md)
+  saves a pane's scrollback to a text file you choose, as iTerm2's "Save
+  Contents" does.
+* [ShowScrollbackInPager](config/lua/keyassignment/ShowScrollbackInPager.md)
+  opens the pane's scrollback, with colors, in a pager in a new tab, like
+  kitty's `show_scrollback`. The pager is set by
+  [scrollback_pager](config/lua/config/scrollback_pager.md).
+* [ToggleBroadcastInput](config/lua/keyassignment/ToggleBroadcastInput.md)
+  sends what you type to every pane in the current tab, like iTerm2's
+  Broadcast Input. The tab's title shows 📢 while it is on.
+* [confirm_multiline_paste](config/lua/config/confirm_multiline_paste.md)
+  asks before pasting text with a line break into a program that hasn't
+  turned on bracketed paste, like kitty and iTerm2. On by default.
+* Finder's Services menu gains "New WezTerm Window Here" and "New WezTerm
+  Tab Here" for folders, like Terminal.app and iTerm2. The tab goes into
+  the WezTerm window you used last.
+* [MoveTabToNewWindow](config/lua/keyassignment/MoveTabToNewWindow.md)
+  and [MergeAllWindows](config/lua/keyassignment/MergeAllWindows.md), in
+  the Window menu, as in Terminal.app and iTerm2.
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.
@@ -181,6 +330,52 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* With
+  [switch_to_last_active_tab_when_closing_tab](config/lua/config/switch_to_last_active_tab_when_closing_tab.md),
+  closing a tab to the left of the previously active tab activated the
+  tab after it instead.
+* Making the window wider moved a cursor at the start of a line (for
+  example, a fresh prompt line) to the end of the line above. It now
+  stays put.
+* Pasted text could end bracketed paste early by nesting its end marker
+  (`ESC[201\ESC[201~~`), so the rest of the paste ran as if typed. All
+  bracketed paste markers are now removed from pasted text.
+* macOS: starting `wezterm-gui` with arguments, such as
+  `wezterm-gui start`, no longer opens a second window that tries to run
+  `start` as a script and closes.
+* macOS: a window whose height is an odd number of rows no longer opens
+  one row short on a Retina screen.
+* Opening a folder with WezTerm, by dropping it on the Dock icon or with
+  `open -a WezTerm DIR`, now opens a window with a shell in that folder.
+  Before, it typed the folder's path into a new shell as a command. A
+  folder or script opened while WezTerm isn't running is no longer
+  ignored; it opens in its own window next to the startup window.
+* Opening a shell script with WezTerm from Finder now runs it with your
+  login shell (`-l -i -c`). Before, the command was typed into a new
+  shell, and shells that drop input typed before their first prompt never
+  ran it.
+* `wezterm cli set-window-title` and `MuxWindow:set_title` had no
+  visible effect: the window kept showing the active pane's title. The
+  title now shows until a pane sets a new title. #4899
+* Kitty keyboard protocol: with "report all keys as escape codes" (flag 8)
+  enabled, text keys were still sent as plain text, and Ctrl+letter as a
+  control character. They are now sent as `CSI ... u` sequences. #4003
+* macOS: Ctrl+Shift with `,` `.` `/` `=` `` ` `` or a digit was sent
+  without its modifiers, so kitty keyboard apps saw a bare `,` for
+  Ctrl+Shift+,. The shifted key and both modifiers are now sent, as kitty
+  and xterm do. #6994
+* Kitty keyboard protocol: a key typed without Shift is no longer reported
+  as the US key it would be shifted from (a `^` from a dead key on an
+  AZERTY layout was reported as `6`), and the shifted alternate key is
+  only reported while Shift is held. Caps Lock
+  letters outside ASCII are reported in lower case too. #4916
+* macOS: pressing or releasing a modifier key on its own (Shift, Control,
+  Option, Command) is now reported to apps that ask the kitty keyboard
+  protocol to report all keys as escape codes. Other apps, copy mode and
+  key tables don't see these presses. #5147
+* macOS 27: the native title bar of an opaque window was transparent (it
+  showed as white in dark mode). The window now has an opaque background
+  behind the title bar. #8153
 * Multiplexer: the mouse wheel was not mapped to cursor up/down keys in the
   alternate screen for panes in a `wezterm connect` domain, because the client
   always reported the alternate screen as inactive. The server now advises the

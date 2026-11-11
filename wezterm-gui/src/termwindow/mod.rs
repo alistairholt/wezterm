@@ -10,6 +10,7 @@ use crate::overlay::{
     start_overlay, start_overlay_pane, CopyModeParams, CopyOverlay, LauncherArgs, LauncherFlags,
     QuickSelectOverlay,
 };
+use crate::quad::HeapQuadAllocator;
 use crate::resize_increment_calculator::ResizeIncrementCalculator;
 use crate::scripting::guiwin::GuiWin;
 use crate::scrollbar::*;
@@ -36,8 +37,8 @@ use config::keyassignment::{
 };
 use config::window::WindowLevel;
 use config::{
-    configuration, AudibleBell, ConfigHandle, Dimension, DimensionContext, FrontEndSelection,
-    GeometryOrigin, GuiPosition, TermConfig, WindowCloseConfirmation,
+    configuration, AudibleBell, ConfigHandle, Dimension, DimensionContext, GeometryOrigin,
+    GuiPosition, TermConfig, WindowCloseConfirmation,
 };
 use lfucache::*;
 use mlua::{FromLua, LuaSerdeExt, UserData, UserDataFields};
@@ -54,7 +55,7 @@ use mux::{Mux, MuxNotification};
 use mux_lua::MuxPane;
 use smol::channel::Sender;
 use smol::Timer;
-use std::cell::{RefCell, RefMut};
+use std::cell::{Cell, RefCell, RefMut};
 use std::collections::{HashMap, LinkedList};
 use std::ops::Add;
 use std::rc::Rc;
@@ -205,6 +206,14 @@ pub struct PaneState {
     pub overlay: Option<OverlayState>,
 
     bell_start: Option<Instant>,
+    /// The command the shell integration said is running, and when it
+    /// started. Used by notify_on_command_finish.
+    command_started: Option<(Instant, String)>,
+    /// Set by NotifyWhenCommandFinishes: notify once when the running
+    /// command (or the next one) finishes, whatever the config says.
+    notify_on_next_finish: bool,
+    /// Set by FindCursor: when the crosshair over the cursor started.
+    find_cursor_start: Option<Instant>,
     pub mouse_terminal_coords: Option<(ClickPosition, StableRowIndex)>,
 }
 
@@ -218,10 +227,16 @@ pub struct TabInformation {
     pub active_pane: Option<PaneInformation>,
     pub window_id: MuxWindowId,
     pub tab_title: String,
+    pub has_unseen_bell: bool,
+    pub broadcast_input: bool,
+    pub has_unseen_output: bool,
 }
 
 impl UserData for TabInformation {
     fn add_fields<'lua, F: UserDataFields<'lua, Self>>(fields: &mut F) {
+        fields.add_field_method_get("has_unseen_bell", |_, this| Ok(this.has_unseen_bell));
+        fields.add_field_method_get("broadcast_input", |_, this| Ok(this.broadcast_input));
+        fields.add_field_method_get("has_unseen_output", |_, this| Ok(this.has_unseen_output));
         fields.add_field_method_get("tab_id", |_, this| Ok(this.tab_id));
         fields.add_field_method_get("tab_index", |_, this| Ok(this.tab_index));
         fields.add_field_method_get("is_active", |_, this| Ok(this.is_active));
@@ -347,6 +362,11 @@ pub struct TabState {
     /// contents, we're overlaying a little internal application
     /// tab.  We'll also route input to it.
     pub overlay: Option<OverlayState>,
+    /// A bell rang in this tab while it wasn't the focused tab.
+    /// Cleared when the tab is next shown in a focused window.
+    pub bell_pending: bool,
+    /// Input to the active pane is copied to every pane in this tab.
+    pub broadcast_input: bool,
 }
 
 /// Manages the state/queue of lua based event handlers.
@@ -368,6 +388,11 @@ pub struct TermWindow {
     pub window: Option<Window>,
     pub config: ConfigHandle,
     pub config_overrides: wezterm_dynamic::Value,
+    /// ToggleWindowOpacity put window_background_opacity = 1.0 into
+    /// config_overrides.
+    opacity_override_set: bool,
+    /// True while ToggleTabBar's config overrides are in place.
+    tab_bar_override_set: bool,
     os_parameters: Option<parameters::Parameters>,
     /// When we most recently received keyboard focus
     pub focused: Option<Instant>,
@@ -424,7 +449,7 @@ pub struct TermWindow {
     current_mouse_buttons: Vec<MousePress>,
     current_mouse_capture: Option<MouseCapture>,
 
-    opengl_info: Option<String>,
+    renderer_info: Option<String>,
 
     /// Keeps track of double and triple clicks
     last_mouse_click: Option<LastMouseClick>,
@@ -441,6 +466,9 @@ pub struct TermWindow {
     next_line_state_id: u64,
 
     line_quad_cache: RefCell<LfuCache<LineQuadCacheKey, LineQuadCacheValue>>,
+    /// Reused to build each line's quads before a compact copy goes into
+    /// line_quad_cache; see HeapQuadAllocator.
+    line_quad_scratch: RefCell<HeapQuadAllocator>,
 
     last_status_call: Instant,
     cursor_blink_state: RefCell<ColorEase>,
@@ -471,7 +499,6 @@ pub struct TermWindow {
 
     connection_name: String,
 
-    gl: Option<Rc<glium::backend::Context>>,
     webgpu: Option<Rc<WebGpuState>>,
     config_subscription: Option<config::ConfigSubscription>,
 }
@@ -568,12 +595,12 @@ impl TermWindow {
         self.render_state = None;
 
         let render_info = ctx.renderer_info();
-        self.opengl_info.replace(render_info.clone());
+        self.renderer_info.replace(render_info.clone());
 
         match RenderState::new(ctx, &self.fonts, &self.render_metrics, ATLAS_SIZE) {
             Ok(render_state) => {
                 log::debug!(
-                    "OpenGL initialized! {} wezterm version: {}",
+                    "Renderer initialized! {} wezterm version: {}",
                     render_info,
                     config::wezterm_version(),
                 );
@@ -585,7 +612,7 @@ impl TermWindow {
         }
 
         if self.render_state.is_none() {
-            panic!("No OpenGL");
+            panic!("No renderer");
         }
 
         Ok(())
@@ -697,12 +724,13 @@ impl TermWindow {
             fps: 0.,
             config_subscription: None,
             os_parameters: None,
-            gl: None,
             webgpu: None,
             window: None,
             window_background,
             config: config.clone(),
             config_overrides: wezterm_dynamic::Value::default(),
+            opacity_override_set: false,
+            tab_bar_override_set: false,
             palette: None,
             focused: None,
             mux_window_id,
@@ -761,6 +789,7 @@ impl TermWindow {
                 |config| config.line_quad_cache_size,
                 &config,
             )),
+            line_quad_scratch: RefCell::new(HeapQuadAllocator::default()),
             line_to_ele_shape_cache: RefCell::new(LfuCache::new(
                 "line_to_ele_shape_cache.hit.rate",
                 "line_to_ele_shape_cache.miss.rate",
@@ -801,7 +830,7 @@ impl TermWindow {
             is_click_to_focus_window: false,
             key_table_state: KeyTableState::default(),
             modal: RefCell::new(None),
-            opengl_info: None,
+            renderer_info: None,
         };
 
         let tw = Rc::new(RefCell::new(myself));
@@ -858,19 +887,11 @@ impl TermWindow {
             }
         });
 
-        let gl = match config.front_end {
-            FrontEndSelection::WebGpu => None,
-            _ => Some(window.enable_opengl().await?),
-        };
-
         {
             let mut myself = tw.borrow_mut();
-            let webgpu = match config.front_end {
-                FrontEndSelection::WebGpu => {
-                    Some(Rc::new(WebGpuState::new(&window, &config).await?))
-                }
-                _ => None,
-            };
+            // front_end is accepted for old configs but ignored: this fork
+            // only renders through wgpu's Metal backend.
+            let webgpu = Rc::new(WebGpuState::new(&window, &config).await?);
             myself.config_subscription.replace(config_subscription);
             if config.use_resize_increments {
                 window.set_resize_increments(
@@ -888,14 +909,8 @@ impl TermWindow {
                 );
             }
 
-            if let Some(gl) = gl {
-                myself.gl.replace(Rc::clone(&gl));
-                myself.created(RenderContext::Glium(Rc::clone(&gl)))?;
-            }
-            if let Some(webgpu) = webgpu {
-                myself.webgpu.replace(Rc::clone(&webgpu));
-                myself.created(RenderContext::WebGpu(Rc::clone(&webgpu)))?;
-            }
+            myself.webgpu.replace(Rc::clone(&webgpu));
+            myself.created(RenderContext::new(webgpu))?;
             myself.load_os_parameters();
             window.show();
             myself.subscribe_to_pane_updates();
@@ -976,11 +991,7 @@ impl TermWindow {
                 self.resizes_pending -= 1;
                 if self.is_repaint_pending {
                     self.is_repaint_pending = false;
-                    if self.webgpu.is_some() {
-                        self.do_paint_webgpu()?;
-                    } else {
-                        self.do_paint(window);
-                    }
+                    self.do_paint();
                 }
                 self.apply_pending_scale_changes();
                 Ok(true)
@@ -1018,11 +1029,8 @@ impl TermWindow {
                     Ok(true)
                 } else {
                     self.wait_for_live_resize_repaint();
-                    if self.webgpu.is_some() {
-                        self.do_paint_webgpu()
-                    } else {
-                        Ok(self.do_paint(window))
-                    }
+                    self.do_paint();
+                    Ok(true)
                 }
             }
             WindowEvent::Notification(item) => {
@@ -1076,35 +1084,10 @@ impl TermWindow {
         }
     }
 
-    fn do_paint(&mut self, window: &Window) -> bool {
-        let gl = match self.gl.as_ref() {
-            Some(gl) => gl,
-            None => return false,
-        };
-
-        if gl.is_context_lost() {
-            log::error!("opengl context was lost; should reinit");
-            window.close();
-            front_end().forget_known_window(window);
-            return false;
-        }
-
-        let mut frame = glium::Frame::new(
-            Rc::clone(&gl),
-            (
-                self.dimensions.pixel_width as u32,
-                self.dimensions.pixel_height as u32,
-            ),
-        );
-        self.paint_impl(&mut RenderFrame::Glium(&mut frame));
-        window.finish_frame(frame).is_ok()
-    }
-
-    fn do_paint_webgpu(&mut self) -> anyhow::Result<bool> {
+    fn do_paint(&mut self) {
         // The drawable is sized from self.dimensions when it is acquired
-        // (call_draw_webgpu), so there is no surface to reconfigure here.
-        self.paint_impl(&mut RenderFrame::WebGpu);
-        Ok(true)
+        // (call_draw), so there is no surface to reconfigure here.
+        self.paint_impl();
     }
 
     fn dispatch_notif(&mut self, notif: TermWindowNotif, window: &Window) -> anyhow::Result<()> {
@@ -1201,6 +1184,9 @@ impl TermWindow {
                     alert: Alert::SetUserVar { name, value },
                     pane_id,
                 } => {
+                    if name == "WEZTERM_PROG" && self.window_contains_pane(pane_id) {
+                        self.track_command_for_notification(pane_id, &value);
+                    }
                     self.emit_user_var_event(pane_id, name, value);
                 }
                 MuxNotification::WindowTitleChanged { .. }
@@ -1236,9 +1222,20 @@ impl TermWindow {
 
                     match self.config.audible_bell {
                         AudibleBell::SystemBeep => {
-                            Connection::get().expect("on main thread").beep();
+                            let played = match &self.config.audible_bell_sound {
+                                Some(sound) => ::window::os::macos::sound::play_sound(sound),
+                                None => false,
+                            };
+                            if !played {
+                                Connection::get().expect("on main thread").beep();
+                            }
                         }
                         AudibleBell::Disabled => {}
+                    }
+
+                    if self.config.window_alert_on_bell && self.focused.is_none() {
+                        log::debug!("bell in unfocused window: requesting attention");
+                        window.request_attention();
                     }
 
                     log::trace!("Ding! (this is the bell) in pane {}", pane_id);
@@ -1246,6 +1243,23 @@ impl TermWindow {
 
                     let mut per_pane = self.pane_state(pane_id);
                     per_pane.bell_start.replace(Instant::now());
+                    drop(per_pane);
+
+                    // Mark the tab so the tab bar can show that a bell
+                    // rang there while you weren't looking at it.
+                    {
+                        let mux = Mux::get();
+                        if let Some((_, _, tab_id)) = mux.resolve_pane_id(pane_id) {
+                            let is_active_tab = mux
+                                .get_active_tab_for_window(self.mux_window_id)
+                                .map(|tab| tab.tab_id() == tab_id)
+                                .unwrap_or(false);
+                            if !is_active_tab || self.focused.is_none() {
+                                self.tab_state(tab_id).bell_pending = true;
+                                self.update_title();
+                            }
+                        }
+                    }
                     window.invalidate();
                 }
                 MuxNotification::Alert {
@@ -1977,6 +1991,14 @@ impl TermWindow {
             _ => return,
         };
         let tabs = self.get_tab_information();
+        set_unseen_bell_count(
+            self.mux_window_id,
+            if self.config.macos_dock_badge_on_bell {
+                tabs.iter().filter(|t| t.has_unseen_bell).count()
+            } else {
+                0
+            },
+        );
         let panes = self.get_pane_information();
         let active_tab = tabs.iter().find(|t| t.is_active).cloned();
         let active_pane = panes.iter().find(|p| p.is_active).cloned();
@@ -2027,6 +2049,10 @@ impl TermWindow {
         if tabs_count == 0 {
             return;
         }
+        // A title set with `wezterm cli set-window-title` or
+        // `MuxWindow:set_title` replaces the pane title in the default
+        // window title.
+        let window_title = window.get_explicit_title().map(str::to_string);
         drop(window);
 
         let title = match config::run_immediate_with_lua_config(|lua| {
@@ -2066,15 +2092,16 @@ impl TermWindow {
             Some(title) => title,
             None => {
                 if let (Some(pos), Some(tab)) = (active_pane, active_tab) {
+                    let title = window_title.as_deref().unwrap_or(&pos.title);
                     if tabs_count == 1 {
-                        format!("{}{}", if pos.is_zoomed { "[Z] " } else { "" }, pos.title)
+                        format!("{}{}", if pos.is_zoomed { "[Z] " } else { "" }, title)
                     } else {
                         format!(
                             "{}[{}/{}] {}",
                             if pos.is_zoomed { "[Z] " } else { "" },
                             tab.tab_index + 1,
                             tabs_count,
-                            pos.title
+                            title
                         )
                     }
                 } else {
@@ -2369,11 +2396,15 @@ impl TermWindow {
 
         let gui_win = GuiWin::new(self);
 
-        let opengl_info = self.opengl_info.as_deref().unwrap_or("Unknown").to_string();
+        let renderer_info = self
+            .renderer_info
+            .as_deref()
+            .unwrap_or("Unknown")
+            .to_string();
         let connection_info = self.connection_name.clone();
 
         let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
-            crate::overlay::show_debug_overlay(term, gui_win, opengl_info, connection_info)
+            crate::overlay::show_debug_overlay(term, gui_win, renderer_info, connection_info)
         });
         self.assign_overlay(tab.tab_id(), overlay);
         promise::spawn::spawn(future).detach();
@@ -2688,6 +2719,15 @@ impl TermWindow {
             ToggleFullScreen => {
                 self.window.as_ref().unwrap().toggle_fullscreen();
             }
+            ToggleMaximize => {
+                // Like kitty's toggle_maximized and the Zoom button.
+                let window = self.window.as_ref().unwrap();
+                if self.window_state.contains(WindowState::MAXIMIZED) {
+                    window.restore();
+                } else {
+                    window.maximize();
+                }
+            }
             ToggleAlwaysOnTop => {
                 let window = self.window.clone().unwrap();
                 let current_level = self.window_state.as_window_level();
@@ -2722,6 +2762,25 @@ impl TermWindow {
                 let text = self.selection_text(pane);
                 self.copy_to_clipboard(*dest, text);
             }
+            CopyOrInterrupt => {
+                // Like kitty's copy_or_interrupt.
+                let text = self.selection_text(pane);
+                if text.is_empty() {
+                    // Send it to Broadcast Input targets too, as typing
+                    // Ctrl-C would.
+                    let key = wezterm_term::KeyCode::Char('c');
+                    let mods = wezterm_term::KeyModifiers::CTRL;
+                    pane.key_down(key, mods)?;
+                    for target in self.broadcast_input_targets(pane) {
+                        target.key_down(key, mods).ok();
+                    }
+                } else {
+                    self.copy_to_clipboard(
+                        config::keyassignment::ClipboardCopyDestination::Clipboard,
+                        text,
+                    );
+                }
+            }
             CopyTextTo { text, destination } => {
                 self.copy_to_clipboard(*destination, text.clone());
             }
@@ -2755,7 +2814,12 @@ impl TermWindow {
             ActivateWindowRelativeNoWrap(n) => {
                 self.activate_window_relative(*n, false)?;
             }
-            SendString(s) => pane.writer().write_all(s.as_bytes())?,
+            SendString(s) => {
+                pane.writer().write_all(s.as_bytes())?;
+                for target in self.broadcast_input_targets(pane) {
+                    target.writer().write_all(s.as_bytes()).ok();
+                }
+            }
             SendKey(key) => {
                 use keyevent::Key;
                 let mods = key.mods;
@@ -2763,6 +2827,9 @@ impl TermWindow {
                     &key.key.resolve(self.config.key_map_preference),
                 ) {
                     pane.key_down(key, mods)?;
+                    for target in self.broadcast_input_targets(pane) {
+                        target.key_down(key, mods).ok();
+                    }
                 }
             }
             Hide => {
@@ -2776,7 +2843,25 @@ impl TermWindow {
                 }
             }
             CloseCurrentTab { confirm } => self.close_current_tab(*confirm),
+            CloseOtherTabs { confirm } => self.close_other_tabs(*confirm),
+            UndoCloseTab => {
+                if !undo_close_tab(self.mux_window_id) {
+                    log::info!("UndoCloseTab: no recently closed tab to bring back");
+                }
+            }
+            RenameTab => {
+                let mux = Mux::get();
+                if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+                    let current_title = tab.get_title();
+                    let (overlay, future) = start_overlay(self, &tab, move |tab_id, term| {
+                        crate::overlay::prompt::show_rename_tab_overlay(term, tab_id, current_title)
+                    });
+                    self.assign_overlay(tab.tab_id(), overlay);
+                    promise::spawn::spawn(future).detach();
+                }
+            }
             CloseCurrentPane { confirm } => self.close_current_pane(*confirm),
+            CloseOtherPanes { confirm } => self.close_other_panes(*confirm),
             Nop | DisableDefaultAssignment => {}
             ReloadConfiguration => config::reload(),
             MoveTab(n) => self.move_tab(*n)?,
@@ -2801,9 +2886,120 @@ impl TermWindow {
                 };
                 self.show_launcher_impl(args, 0);
             }
+            MoveTabToNewWindow => {
+                let mux = Mux::get();
+                let tab_count = mux
+                    .get_window(self.mux_window_id)
+                    .map(|w| w.iter_tabs().count())
+                    .unwrap_or(0);
+                // A lone tab is already in a window of its own.
+                if tab_count > 1 {
+                    if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+                        mux.move_tab_to_window(tab.tab_id(), None)?;
+                    }
+                }
+            }
+            MovePaneToNewTab | MovePaneToNewWindow => {
+                let new_window = matches!(assignment, MovePaneToNewWindow);
+                self.move_active_pane_out(new_window)?;
+            }
+            MovePaneToTab(n) => self.move_active_pane_to_tab(*n),
+            MergeAllWindows => {
+                let mux = Mux::get();
+                let workspace = mux
+                    .get_window(self.mux_window_id)
+                    .map(|w| w.get_workspace().to_string());
+                if let Some(workspace) = workspace {
+                    let active_tab = mux.get_active_tab_for_window(self.mux_window_id);
+                    for window_id in mux.iter_windows_in_workspace(&workspace) {
+                        if window_id == self.mux_window_id {
+                            continue;
+                        }
+                        let tab_ids: Vec<TabId> = match mux.get_window(window_id) {
+                            Some(w) => w.iter_tabs().map(|t| t.tab_id()).collect(),
+                            None => continue,
+                        };
+                        for tab_id in tab_ids {
+                            mux.move_tab_to_window(tab_id, Some(self.mux_window_id))?;
+                        }
+                    }
+                    // Stay on the tab you were using.
+                    if let Some(tab) = active_tab {
+                        if let Some(mut window) = mux.get_window_mut(self.mux_window_id) {
+                            if let Some(idx) = window.get_tab_idx_for_id(tab.tab_id()) {
+                                window.set_active_tab_idx_without_saving(idx);
+                            }
+                        }
+                    }
+                }
+            }
+            ToggleBroadcastInput => {
+                if let Some(tab) = Mux::get().get_active_tab_for_window(self.mux_window_id) {
+                    let mut state = self.tab_state(tab.tab_id());
+                    state.broadcast_input = !state.broadcast_input;
+                    drop(state);
+                    self.update_title();
+                }
+            }
+            ShowScrollbackInPager => {
+                if let Err(err) = self.show_scrollback_in_pager(pane) {
+                    log::error!("ShowScrollbackInPager: {err:#}");
+                }
+            }
+            ShowLastCommandOutputInPager => {
+                if let Err(err) = self.show_last_command_output_in_pager(pane) {
+                    log::error!("ShowLastCommandOutputInPager: {err:#}");
+                }
+            }
+            SaveScrollbackToFile => self.save_scrollback_to_file(pane),
+            ToggleWindowOpacity => self.toggle_window_opacity(),
+            ToggleTabBar => self.toggle_tab_bar(),
+            NotifyWhenCommandFinishes => {
+                let state = &mut self.pane_state(pane.pane_id()).notify_on_next_finish;
+                *state = !*state;
+                log::info!(
+                    "pane {}: notify when the command finishes: {}",
+                    pane.pane_id(),
+                    *state
+                );
+            }
+            CopyLastCommandOutput => match last_command_output(pane) {
+                Ok(lines) => {
+                    let text = lines
+                        .iter()
+                        .map(|line| line.as_str().trim_end().to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    self.copy_to_clipboard(
+                        config::keyassignment::ClipboardCopyDestination::Clipboard,
+                        text.trim_end_matches('\n').to_string(),
+                    );
+                }
+                Err(err) => log::error!("CopyLastCommandOutput: {err:#}"),
+            },
+            FindCursor => {
+                // The cursor is at the bottom of the scrollback, so bring
+                // it on screen before drawing the crosshair over it.
+                let dims = pane.get_dimensions();
+                self.set_viewport(pane.pane_id(), None, dims);
+                self.pane_state(pane.pane_id()).find_cursor_start = Some(Instant::now());
+                self.window.as_ref().unwrap().invalidate();
+            }
+            SelectLastCommandOutput => match last_command_output_zone(pane) {
+                Ok((zone, lines)) => self.select_command_output(pane, &zone, &lines),
+                Err(err) => log::error!("SelectLastCommandOutput: {err:#}"),
+            },
+            ToggleAppVisibility => {
+                ::window::os::macos::global_hotkey::toggle_app_visibility();
+            }
             HideApplication => {
                 let con = Connection::get().expect("call on gui thread");
                 con.hide_application();
+            }
+            ToggleSecureKeyboardEntry => {
+                use ::window::os::macos::secure_input;
+                secure_input::set_secure_keyboard_entry(!secure_input::secure_keyboard_entry());
+                crate::commands::CommandDef::update_secure_keyboard_entry_menu_state();
             }
             QuitApplication => {
                 let mux = Mux::get();
@@ -2837,6 +3033,7 @@ impl TermWindow {
             ClearSelection => {
                 self.clear_selection(pane);
             }
+            SelectAll => self.select_all(pane),
             StartWindowDrag => {
                 self.window_drag_position = self.current_mouse_event.clone();
             }
@@ -2954,6 +3151,14 @@ impl TermWindow {
                                 prevent_fallback: false,
                             });
                         });
+                }
+            }
+            BalancePanes => {
+                let mux = Mux::get();
+                if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+                    if self.tab_state(tab.tab_id()).overlay.is_none() {
+                        tab.balance_panes();
+                    }
                 }
             }
             AdjustPaneSize(direction, amount) => {
@@ -3246,6 +3451,66 @@ impl TermWindow {
         }
     }
 
+    /// Close every pane in the active tab except the active one, like
+    /// kitty's close_other_windows_in_tab. With `confirm`, ask once
+    /// first if any of those panes would prompt on its own.
+    fn close_other_panes(&mut self, confirm: bool) {
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+        let active = match tab.get_active_pane() {
+            Some(pane) => pane,
+            None => return,
+        };
+        let others: Vec<Arc<dyn Pane>> = tab
+            .iter_panes_ignoring_zoom()
+            .into_iter()
+            .map(|pos| pos.pane)
+            .filter(|pane| pane.pane_id() != active.pane_id())
+            .collect();
+        if others.is_empty() {
+            return;
+        }
+
+        let needs_prompt = confirm
+            && others
+                .iter()
+                .any(|pane| !pane.can_close_without_prompting(CloseReason::Pane));
+        let pane_ids: Vec<PaneId> = others.iter().map(|pane| pane.pane_id()).collect();
+        if !needs_prompt {
+            for pane_id in pane_ids {
+                mux.remove_pane(pane_id);
+            }
+            return;
+        }
+
+        let count = pane_ids.len();
+        let message = if count == 1 {
+            "🛑 Really kill the other pane in this tab?".to_string()
+        } else {
+            format!("🛑 Really kill the {count} other panes in this tab?")
+        };
+        let window = self.window.clone().unwrap();
+        let (overlay, future) = start_overlay_pane(self, &active, move |pane_id, mut term| {
+            let confirmed = crate::overlay::confirm::run_confirmation(&message, &mut term)?;
+            TermWindow::schedule_cancel_overlay_for_pane(window, pane_id);
+            if confirmed {
+                promise::spawn::spawn_into_main_thread(async move {
+                    let mux = Mux::get();
+                    for pane_id in pane_ids {
+                        mux.remove_pane(pane_id);
+                    }
+                })
+                .detach();
+            }
+            Ok(())
+        });
+        self.assign_overlay_for_pane(active.pane_id(), overlay);
+        promise::spawn::spawn(future).detach();
+    }
+
     fn close_specific_tab(&mut self, tab_idx: usize, confirm: bool) {
         let mux = Mux::get();
         let mux_window_id = self.mux_window_id;
@@ -3273,7 +3538,7 @@ impl TermWindow {
             self.assign_overlay(tab_id, overlay);
             promise::spawn::spawn(future).detach();
         } else {
-            mux.remove_tab(tab_id);
+            close_tab_with_undo(tab_id);
         }
     }
 
@@ -3293,8 +3558,70 @@ impl TermWindow {
             self.assign_overlay(tab_id, overlay);
             promise::spawn::spawn(future).detach();
         } else {
-            mux.remove_tab(tab_id);
+            close_tab_with_undo(tab_id);
         }
+    }
+
+    /// Close every tab in this window except the active one, like
+    /// iTerm's Close Other Tabs. With `confirm`, ask once first if any
+    /// of those tabs would prompt on its own.
+    fn close_other_tabs(&mut self, confirm: bool) {
+        let mux = Mux::get();
+        let (active_tab, others) = {
+            let window = match mux.get_window(self.mux_window_id) {
+                Some(window) => window,
+                None => return,
+            };
+            let active_tab = match window.get_active_tab() {
+                Some(tab) => Arc::clone(tab),
+                None => return,
+            };
+            let others: Vec<Arc<Tab>> = window
+                .iter_tabs()
+                .filter(|tab| tab.tab_id() != active_tab.tab_id())
+                .cloned()
+                .collect();
+            (active_tab, others)
+        };
+        if others.is_empty() {
+            return;
+        }
+
+        let needs_prompt = confirm
+            && others
+                .iter()
+                .any(|tab| !tab.can_close_without_prompting(CloseReason::Tab));
+        let tab_ids: Vec<TabId> = others.iter().map(|tab| tab.tab_id()).collect();
+        if !needs_prompt {
+            for tab_id in tab_ids {
+                mux.remove_tab(tab_id);
+            }
+            return;
+        }
+
+        let count = tab_ids.len();
+        let message = if count == 1 {
+            "🛑 Really kill the other tab and all its panes?".to_string()
+        } else {
+            format!("🛑 Really kill the {count} other tabs and all their panes?")
+        };
+        let window = self.window.clone().unwrap();
+        let (overlay, future) = start_overlay(self, &active_tab, move |tab_id, mut term| {
+            let confirmed = crate::overlay::confirm::run_confirmation(&message, &mut term)?;
+            TermWindow::schedule_cancel_overlay(window, tab_id, None);
+            if confirmed {
+                promise::spawn::spawn_into_main_thread(async move {
+                    let mux = Mux::get();
+                    for tab_id in tab_ids {
+                        mux.remove_tab(tab_id);
+                    }
+                })
+                .detach();
+            }
+            Ok(())
+        });
+        self.assign_overlay(active_tab.tab_id(), overlay);
+        promise::spawn::spawn(future).detach();
     }
 
     pub fn pane_state(&self, pane_id: PaneId) -> RefMut<'_, PaneState> {
@@ -3479,11 +3806,24 @@ impl TermWindow {
             .enumerate()
             .map(|(idx, tab)| {
                 let panes = self.get_pos_panes_for_tab(tab);
+                let is_active = tab_index == idx;
+
+                let broadcast_input = self.tab_state(tab.tab_id()).broadcast_input;
+                let has_unseen_bell = {
+                    let mut state = self.tab_state(tab.tab_id());
+                    if is_active && self.focused.is_some() {
+                        state.bell_pending = false;
+                    }
+                    state.bell_pending
+                };
 
                 TabInformation {
+                    has_unseen_output: panes.iter().any(|p| p.pane.has_unseen_output()),
+                    has_unseen_bell,
+                    broadcast_input,
                     tab_index: idx,
                     tab_id: tab.tab_id(),
-                    is_active: tab_index == idx,
+                    is_active,
                     is_last_active: window
                         .get_last_active_tab_idx()
                         .map(|last_active| last_active == idx)
@@ -3636,10 +3976,509 @@ impl Drop for TermWindow {
         // (will actually unsubscribe on the next notif from mux)
         self.mux_subscription_dead.store(true, Ordering::Relaxed);
         self.clear_all_overlays();
+        set_unseen_bell_count(self.mux_window_id, 0);
         if let Some(window) = self.window.take() {
             if let Some(fe) = try_front_end() {
                 fe.forget_known_window(&window);
             }
         }
     }
+}
+
+impl TermWindow {
+    /// The shell integration sets WEZTERM_PROG to the command line when
+    /// a command starts and clears it at the next prompt. When a command
+    /// that ran long enough finishes while you aren't looking, show a
+    /// notification, like kitty's notify_on_cmd_finish.
+    fn track_command_for_notification(&mut self, pane_id: PaneId, value: &str) {
+        use config::NotifyOnCommandFinish;
+        let mode = self.config.notify_on_command_finish;
+        if !value.is_empty() {
+            self.pane_state(pane_id)
+                .command_started
+                .replace((Instant::now(), value.to_string()));
+            return;
+        }
+        let started = self.pane_state(pane_id).command_started.take();
+        let Some((started, command)) = started else {
+            return;
+        };
+        let elapsed = started.elapsed();
+        let requested = std::mem::take(&mut self.pane_state(pane_id).notify_on_next_finish);
+        let long_enough = elapsed.as_secs_f64() >= self.config.notify_on_command_finish_after_secs;
+        let show = requested
+            || long_enough
+                && match mode {
+                    NotifyOnCommandFinish::Never => false,
+                    NotifyOnCommandFinish::Unfocused => self.focused.is_none(),
+                    NotifyOnCommandFinish::Invisible => {
+                        self.focused.is_none() || !self.is_pane_visible(pane_id)
+                    }
+                    NotifyOnCommandFinish::Always => true,
+                };
+        log::debug!(
+            "command finished in pane {pane_id} after {elapsed:?}: {command:?}; notify={show}"
+        );
+        if show {
+            let secs = elapsed.as_secs();
+            let took = if secs >= 60 {
+                format!("{}m {}s", secs / 60, secs % 60)
+            } else {
+                format!("{secs}s")
+            };
+            wezterm_toast_notification::show(wezterm_toast_notification::ToastNotification {
+                title: "Command finished".to_string(),
+                message: format!("{command} (took {took})"),
+                url: None,
+                timeout: None,
+            });
+        }
+    }
+
+    /// Move the active pane into a tab of its own, in this window or in
+    /// a new one, like kitty's detach_window and iTerm2's Move Session.
+    fn move_active_pane_out(&mut self, new_window: bool) -> anyhow::Result<()> {
+        let mux = Mux::get();
+        let Some(pane) = self.get_active_pane_no_overlay() else {
+            return Ok(());
+        };
+        let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) else {
+            return Ok(());
+        };
+        if tab.count_panes().unwrap_or(1) <= 1 {
+            // The pane already has the tab to itself. For a new window,
+            // move the whole tab, unless it is the window's only tab.
+            if new_window {
+                let tab_count = mux
+                    .get_window(self.mux_window_id)
+                    .map(|w| w.iter_tabs().count())
+                    .unwrap_or(0);
+                if tab_count > 1 {
+                    mux.move_tab_to_window(tab.tab_id(), None)?;
+                }
+            }
+            return Ok(());
+        }
+        let pane_id = pane.pane_id();
+        let window_id = if new_window {
+            None
+        } else {
+            Some(self.mux_window_id)
+        };
+        promise::spawn::spawn(async move {
+            let mux = Mux::get();
+            if let Err(err) = mux.move_pane_to_new_tab(pane_id, window_id, None).await {
+                log::error!("failed to move pane {pane_id} to a new tab: {err:#}");
+                return;
+            }
+            mux.focus_pane_and_containing_tab(pane_id).ok();
+        })
+        .detach();
+        Ok(())
+    }
+
+    /// Move the active pane into another tab of this window, split to the
+    /// right of that tab's active pane, like kitty's detach_window to a
+    /// tab. `tab_idx` counts from 0, or from the right when negative, as
+    /// ActivateTab does. If the pane was alone in its tab, that tab
+    /// closes.
+    fn move_active_pane_to_tab(&mut self, tab_idx: isize) {
+        let mux = Mux::get();
+        let Some(pane) = self.get_active_pane_no_overlay() else {
+            return;
+        };
+        let pane_id = pane.pane_id();
+        let target_pane_id = {
+            let Some(window) = mux.get_window(self.mux_window_id) else {
+                return;
+            };
+            let count = window.count_tabs();
+            let idx = if tab_idx < 0 {
+                count.saturating_sub(tab_idx.unsigned_abs())
+            } else {
+                tab_idx as usize
+            };
+            let Some(tab) = window.get_tab_at_idx(idx) else {
+                return;
+            };
+            if tab.contains_pane(pane_id) {
+                return;
+            }
+            let Some(target) = tab.get_active_pane() else {
+                return;
+            };
+            target.pane_id()
+        };
+        promise::spawn::spawn(async move {
+            let mux = Mux::get();
+            if let Err(err) = mux
+                .split_pane(
+                    target_pane_id,
+                    SplitRequest::default(),
+                    mux::domain::SplitSource::MovePane(pane_id),
+                    config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
+                )
+                .await
+            {
+                log::error!("failed to move pane {pane_id} to another tab: {err:#}");
+                return;
+            }
+            mux.focus_pane_and_containing_tab(pane_id).ok();
+        })
+        .detach();
+    }
+
+    /// Like iTerm2's View > Use Transparency: make a translucent window
+    /// opaque by overriding window_background_opacity for this window,
+    /// and remove that override to make it translucent again.
+    fn toggle_window_opacity(&mut self) {
+        use wezterm_dynamic::{Object, ToDynamic, Value};
+        const KEY: &str = "window_background_opacity";
+
+        let mut overrides = match &self.config_overrides {
+            Value::Object(obj) => obj.clone(),
+            _ => Object::default(),
+        };
+        let key = Value::String(KEY.to_string());
+        let opaque = Some(1.0f64.to_dynamic());
+        if self.opacity_override_set && overrides.get(&key) == opaque.as_ref() {
+            overrides.remove(&key);
+            self.opacity_override_set = false;
+        } else if self.config.window_background_opacity < 1.0 {
+            overrides.insert(key, 1.0f64.to_dynamic());
+            self.opacity_override_set = true;
+        } else {
+            log::info!("ToggleWindowOpacity: the window is already opaque");
+            return;
+        }
+        self.config_overrides = Value::Object(overrides);
+        self.config_was_reloaded();
+    }
+
+    /// Like iTerm's View > Show/Hide Tab Bar. Hiding sets enable_tab_bar
+    /// to false; showing also turns off hide_tab_bar_if_only_one_tab so
+    /// the bar appears with one tab. The next toggle removes the
+    /// overrides and goes back to the config file's settings.
+    fn toggle_tab_bar(&mut self) {
+        use wezterm_dynamic::{Object, ToDynamic, Value};
+        const ENABLE: &str = "enable_tab_bar";
+        const HIDE_IF_ONE: &str = "hide_tab_bar_if_only_one_tab";
+
+        let mut overrides = match &self.config_overrides {
+            Value::Object(obj) => obj.clone(),
+            _ => Object::default(),
+        };
+        let enable = Value::String(ENABLE.to_string());
+        let hide_if_one = Value::String(HIDE_IF_ONE.to_string());
+        if self.tab_bar_override_set {
+            overrides.remove(&enable);
+            overrides.remove(&hide_if_one);
+            self.tab_bar_override_set = false;
+        } else if self.show_tab_bar {
+            overrides.insert(enable, false.to_dynamic());
+            self.tab_bar_override_set = true;
+        } else {
+            overrides.insert(enable, true.to_dynamic());
+            overrides.insert(hide_if_one, false.to_dynamic());
+            self.tab_bar_override_set = true;
+        }
+        self.config_overrides = Value::Object(overrides);
+        self.config_was_reloaded();
+    }
+
+    /// Like iTerm2's Save Contents: ask where to save, then write the
+    /// pane's scrollback and screen there as plain text.
+    fn save_scrollback_to_file(&mut self, pane: &Arc<dyn Pane>) {
+        let dims = pane.get_dimensions();
+        let end = dims.physical_top + dims.viewport_rows as StableRowIndex;
+        let (_first, lines) = pane.get_lines(dims.scrollback_top..end);
+        let mut text = lines
+            .iter()
+            .map(|line| line.as_str().trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        text.truncate(text.trim_end().len());
+        text.push('\n');
+
+        let name = format!(
+            "WezTerm {}.txt",
+            chrono::Local::now().format("%Y-%m-%d at %H.%M.%S")
+        );
+        // Show the panel from its own task: AppKit calls back into the
+        // window while it attaches the sheet, and the window's state is
+        // still borrowed while this action runs.
+        promise::spawn::spawn(async move {
+            ::window::os::macos::save_panel::choose_save_path(&name, move |path| {
+                let Some(path) = path else {
+                    return;
+                };
+                match std::fs::write(&path, &text) {
+                    Ok(()) => log::info!("Saved scrollback to {}", path.display()),
+                    Err(err) => {
+                        log::error!("Failed to save scrollback to {}: {err:#}", path.display());
+                        wezterm_toast_notification::persistent_toast_notification(
+                            "Couldn't save contents",
+                            &format!("{}: {err}", path.display()),
+                        );
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Write the pane's scrollback and screen, with escape sequences
+    /// for colors and attributes, to a private temporary file and open
+    /// it with `scrollback_pager` in a new tab, as the pager's standard
+    /// input. The file is removed as soon as the pager has it open.
+    fn show_scrollback_in_pager(&mut self, pane: &Arc<dyn Pane>) -> anyhow::Result<()> {
+        let dims = pane.get_dimensions();
+        let end = dims.physical_top + dims.viewport_rows as StableRowIndex;
+        let (_first, lines) = pane.get_lines(dims.scrollback_top..end);
+        self.show_lines_in_pager(pane, lines)
+    }
+
+    /// Like kitty's show_last_non_empty_command_output: open the output
+    /// of the last command that printed something. The shell
+    /// integration marks command output with OSC 133, which the
+    /// terminal keeps as Output semantic zones.
+    fn show_last_command_output_in_pager(&mut self, pane: &Arc<dyn Pane>) -> anyhow::Result<()> {
+        let lines = last_command_output(pane)?;
+        self.show_lines_in_pager(pane, lines)
+    }
+
+    fn show_lines_in_pager(
+        &mut self,
+        pane: &Arc<dyn Pane>,
+        mut lines: Vec<wezterm_term::Line>,
+    ) -> anyhow::Result<()> {
+        use std::io::Write;
+
+        anyhow::ensure!(
+            !self.config.scrollback_pager.is_empty(),
+            "scrollback_pager is empty"
+        );
+
+        // Blank rows below the cursor would leave the pager showing
+        // empty space at the end.
+        while lines
+            .last()
+            .map(|line| line.as_str().trim_end().is_empty())
+            .unwrap_or(false)
+        {
+            lines.pop();
+        }
+        let text = termwiz_funcs::lines_to_escapes(lines)?;
+
+        let mut file = tempfile::Builder::new()
+            .prefix("wezterm-scrollback-")
+            .suffix(".txt")
+            .tempfile()?;
+        file.write_all(text.as_bytes())?;
+        let (_, path) = file.keep()?;
+
+        let mut args = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            // Open the file as the pager's input, then remove it, so
+            // nothing is left behind however the pager or tab ends.
+            r#"exec <"$1" && rm -f -- "$1" && shift && exec "$@""#.to_string(),
+            "sh".to_string(),
+            path.to_string_lossy().into_owned(),
+        ];
+        args.extend(self.config.scrollback_pager.iter().cloned());
+
+        // The file is local, so the pager must run locally even when the
+        // pane belongs to an SSH or remote mux domain.
+        self.spawn_command(
+            &SpawnCommand {
+                args: Some(args),
+                cwd: pane
+                    .get_current_working_dir(CachePolicy::AllowStale)
+                    .and_then(|url| url.to_file_path().ok())
+                    .filter(|path| path.is_dir()),
+                domain: config::keyassignment::SpawnTabDomain::DomainName("local".to_string()),
+                ..SpawnCommand::default()
+            },
+            SpawnWhere::NewTab,
+        );
+
+        // The shell removes the file as soon as the pager has it open.
+        // If the spawn fails, nothing does, and the file holds the whole
+        // scrollback, so remove it here after a while either way.
+        promise::spawn::spawn(async move {
+            Timer::after(Duration::from_secs(30)).await;
+            std::fs::remove_file(&path).ok();
+        })
+        .detach();
+        Ok(())
+    }
+}
+
+/// The lines of the newest Output semantic zone that holds non-blank
+/// text. The shell integration marks command output with OSC 133, so
+/// this leaves out the prompt and the command line.
+fn last_command_output(pane: &Arc<dyn Pane>) -> anyhow::Result<Vec<wezterm_term::Line>> {
+    last_command_output_zone(pane).map(|(_zone, lines)| lines)
+}
+
+/// Like `last_command_output`, but also returns the zone, so callers
+/// know where the output sits in the scrollback.
+fn last_command_output_zone(
+    pane: &Arc<dyn Pane>,
+) -> anyhow::Result<(wezterm_term::SemanticZone, Vec<wezterm_term::Line>)> {
+    let zones = pane.get_semantic_zones()?;
+    for zone in zones.iter().rev() {
+        if zone.semantic_type != wezterm_term::SemanticType::Output {
+            continue;
+        }
+        let (_first, lines) = pane.get_lines(zone.start_y..zone.end_y + 1);
+        if lines.iter().all(|line| line.as_str().trim().is_empty()) {
+            continue;
+        }
+        return Ok((*zone, lines));
+    }
+    anyhow::bail!(
+        "no command output found in pane {}; is shell integration set up?",
+        pane.pane_id()
+    )
+}
+
+/// A tab closed with undo, waiting for UndoCloseTab or its timeout.
+struct ClosedTab {
+    tab_id: TabId,
+    window_id: MuxWindowId,
+    idx: usize,
+    /// Tells this close apart from an earlier close of the same tab
+    /// that was undone, so that close's timer leaves this one alone.
+    generation: u64,
+}
+
+thread_local! {
+    /// Tabs closed in the last `undo_close_tab_seconds`, oldest first.
+    static CLOSED_TABS: RefCell<Vec<ClosedTab>> = RefCell::new(vec![]);
+    static CLOSED_TAB_GENERATION: Cell<u64> = Cell::new(0);
+}
+
+/// Close a tab so that UndoCloseTab can bring it back for
+/// `undo_close_tab_seconds`, as iTerm2 does. The tab leaves its window
+/// at once, but its panes keep running until the time is up. The last
+/// tab in a window is closed for good, as is any tab when the setting
+/// is 0, because a window with no tabs closes.
+pub fn close_tab_with_undo(tab_id: TabId) {
+    let mux = Mux::get();
+    let seconds = config::configuration().undo_close_tab_seconds;
+    let alone = mux
+        .window_containing_tab(tab_id)
+        .and_then(|id| mux.get_window(id).map(|w| w.count_tabs() <= 1))
+        .unwrap_or(true);
+    if seconds == 0 || alone {
+        mux.remove_tab(tab_id);
+        return;
+    }
+    let (window_id, idx) = match mux.detach_tab_from_window(tab_id) {
+        Ok(found) => found,
+        Err(err) => {
+            log::error!("close_tab_with_undo: {err:#}");
+            mux.remove_tab(tab_id);
+            return;
+        }
+    };
+    let generation = CLOSED_TAB_GENERATION.with(|counter| {
+        let next = counter.get() + 1;
+        counter.set(next);
+        next
+    });
+    CLOSED_TABS.with(|tabs| {
+        tabs.borrow_mut().push(ClosedTab {
+            tab_id,
+            window_id,
+            idx,
+            generation,
+        })
+    });
+    promise::spawn::spawn(async move {
+        smol::Timer::after(Duration::from_secs(seconds)).await;
+        let still_closed = CLOSED_TABS.with(|tabs| {
+            let mut tabs = tabs.borrow_mut();
+            let before = tabs.len();
+            tabs.retain(|closed| closed.generation != generation);
+            tabs.len() != before
+        });
+        if still_closed {
+            Mux::get().remove_tab(tab_id);
+        }
+    })
+    .detach();
+}
+
+/// Kill every tab waiting for UndoCloseTab. Called when the last
+/// window goes: the waiting tabs' panes would otherwise keep the mux
+/// from being empty, so the app would not quit until their timers ran.
+pub fn discard_closed_tabs() {
+    let closed = CLOSED_TABS.with(|tabs| std::mem::take(&mut *tabs.borrow_mut()));
+    if closed.is_empty() {
+        return;
+    }
+    let mux = Mux::get();
+    for tab in closed {
+        mux.remove_tab(tab.tab_id);
+    }
+}
+
+/// Bring back the most recently closed tab that is still alive, into
+/// the window it came from, or into `fallback_window` if that window
+/// has gone. Returns false if there is nothing to bring back.
+fn undo_close_tab(fallback_window: MuxWindowId) -> bool {
+    let mux = Mux::get();
+    loop {
+        let closed = match CLOSED_TABS.with(|tabs| tabs.borrow_mut().pop()) {
+            Some(closed) => closed,
+            None => return false,
+        };
+        if mux.get_tab(closed.tab_id).is_none() {
+            // Its panes exited while it was closed.
+            continue;
+        }
+        let window_id = if mux.get_window(closed.window_id).is_some() {
+            closed.window_id
+        } else {
+            fallback_window
+        };
+        match mux.restore_tab_to_window(closed.tab_id, window_id, closed.idx) {
+            Ok(()) => return true,
+            Err(err) => {
+                log::error!("UndoCloseTab: {err:#}");
+                mux.remove_tab(closed.tab_id);
+            }
+        }
+    }
+}
+
+thread_local! {
+    /// Per window, the number of tabs with a bell you haven't seen,
+    /// plus the total last shown on the Dock icon.
+    static UNSEEN_BELLS: RefCell<(HashMap<MuxWindowId, usize>, usize)> =
+        RefCell::new((HashMap::new(), 0));
+}
+
+/// Record how many tabs in a window have an unseen bell and update
+/// the Dock badge when the total across all windows changes.
+fn set_unseen_bell_count(window_id: MuxWindowId, count: usize) {
+    UNSEEN_BELLS.with(|cell| {
+        let mut state = cell.borrow_mut();
+        let (per_window, shown) = &mut *state;
+        if count == 0 {
+            per_window.remove(&window_id);
+        } else {
+            per_window.insert(window_id, count);
+        }
+        let total: usize = per_window.values().sum();
+        if total != *shown {
+            *shown = total;
+            log::debug!("tabs with an unseen bell: {total}; updating the Dock badge");
+            let label = total.to_string();
+            ::window::os::macos::dock::set_dock_badge((total > 0).then_some(label.as_str()));
+        }
+    });
 }

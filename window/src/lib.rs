@@ -5,12 +5,9 @@ use config::{ConfigHandle, Dimension, GeometryOrigin};
 use promise::Future;
 use std::any::Any;
 use std::path::PathBuf;
-use std::rc::Rc;
-use thiserror::Error;
 use url::Url;
 pub mod bitmaps;
 pub use wezterm_color_types as color;
-mod configuration;
 pub mod connection;
 pub mod os;
 pub mod screen;
@@ -28,11 +25,8 @@ pub fn default_dpi() -> f64 {
     }
 }
 
-mod egl;
-
 pub use bitmaps::{BitmapImage, Image};
 pub use connection::*;
-pub use glium;
 pub use os::*;
 pub use wezterm_input_types::*;
 
@@ -232,10 +226,6 @@ impl WindowEventSender {
     }
 }
 
-#[derive(Debug, Error)]
-#[error("Graphics drivers lost context")]
-pub struct GraphicsDriversLostContext {}
-
 #[async_trait(?Send)]
 pub trait WindowOps {
     /// Show a hidden window
@@ -244,14 +234,6 @@ pub trait WindowOps {
     fn notify<T: Any + Send + Sync>(&self, t: T)
     where
         Self: Sized;
-
-    /// Setup opengl for rendering
-    async fn enable_opengl(&self) -> anyhow::Result<Rc<glium::backend::Context>>;
-    /// Advise the window that a frame is finished
-    fn finish_frame(&self, frame: glium::Frame) -> anyhow::Result<()> {
-        frame.finish()?;
-        Ok(())
-    }
 
     /// Hide a visible window
     fn hide(&self);
@@ -319,6 +301,10 @@ pub trait WindowOps {
     fn maximize(&self) {}
     fn restore(&self) {}
     fn focus(&self) {}
+
+    /// Ask the desktop to draw the user's attention to this app,
+    /// for example by bouncing its Dock icon once.
+    fn request_attention(&self) {}
 
     fn toggle_fullscreen(&self) {}
 

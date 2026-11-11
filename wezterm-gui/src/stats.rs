@@ -10,15 +10,38 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tabout::{tabulate_output, Alignment, Column};
 
+/// Like `metrics::histogram!` with a literal name, but looks the handle up
+/// in the recorder only once per call site. `histogram!` does that lookup
+/// (a lock and a map search) on every call, which adds up in code that
+/// runs per glyph or per line. Only use it after `Stats::init`: a handle
+/// looked up before the recorder is installed stays a no-op.
+macro_rules! cached_histogram {
+    ($name:literal) => {{
+        static HANDLE: std::sync::LazyLock<metrics::Histogram> =
+            std::sync::LazyLock::new(|| metrics::histogram!($name));
+        &*HANDLE
+    }};
+}
+pub(crate) use cached_histogram;
+
 static ENABLE_STAT_PRINT: AtomicBool = AtomicBool::new(true);
 lazy_static::lazy_static! {
     static ref INNER: Arc<Mutex<Inner>> = make_inner();
 }
 
+/// Counts events per second, for metrics named `*.rate`.
+///
+/// Cache hits and misses record into these on every lookup, many times a
+/// frame, so `record` only adds to the count. It used to read the clock on
+/// every call to see whether the one-second window had ended, which cost
+/// about 7ms of main thread time per second while output scrolls. The
+/// stats thread now closes the window once a second instead (`roll`).
 struct ThroughputInner {
     hist: Histogram<u64>,
-    last: Option<Instant>,
+    /// Events in the window that is still open.
     count: u64,
+    /// Events in the last window that closed.
+    last_window: u64,
 }
 
 struct Throughput {
@@ -30,13 +53,26 @@ impl Throughput {
         Self {
             inner: Mutex::new(ThroughputInner {
                 hist: Histogram::new(2).expect("failed to create histogram"),
-                last: None,
                 count: 0,
+                last_window: 0,
             }),
         }
     }
+
+    /// Events in the last full second.
     fn current(&self) -> u64 {
-        self.inner.lock().current()
+        self.inner.lock().last_window
+    }
+
+    /// Closes the current one-second window. Windows with no events are
+    /// not recorded, so idle time doesn't drag the percentiles to zero.
+    fn roll(&self) {
+        let mut inner = self.inner.lock();
+        let count = std::mem::take(&mut inner.count);
+        inner.last_window = count;
+        if count > 0 {
+            inner.hist.record(count).ok();
+        }
     }
 
     fn percentiles(&self) -> (u64, u64, u64) {
@@ -48,38 +84,9 @@ impl Throughput {
     }
 }
 
-impl ThroughputInner {
-    fn add(&mut self, value: u64) {
-        if let Some(ref last) = self.last {
-            let elapsed = last.elapsed();
-            if elapsed > Duration::from_secs(1) {
-                self.hist.record(self.count).ok();
-                self.count = 0;
-                self.last = Some(Instant::now());
-            }
-        } else {
-            // Start a new window
-            self.last = Some(Instant::now());
-        };
-        self.count += value;
-    }
-
-    fn current(&mut self) -> u64 {
-        if let Some(ref last) = self.last {
-            let elapsed = last.elapsed();
-            if elapsed > Duration::from_secs(1) {
-                self.hist.record(self.count).ok();
-                self.count = 0;
-                self.last = Some(Instant::now());
-            }
-        }
-        self.count
-    }
-}
-
 impl metrics::HistogramFn for Throughput {
     fn record(&self, value: f64) {
-        self.inner.lock().add(value as u64);
+        self.inner.lock().count += value as u64;
     }
 }
 
@@ -204,6 +211,10 @@ impl Inner {
                 break;
             }
 
+            for tput in inner.lock().throughput.values() {
+                tput.roll();
+            }
+
             let seconds = configuration().periodic_stat_logging;
             if seconds == 0 {
                 continue;
@@ -211,8 +222,8 @@ impl Inner {
             if last_print.elapsed() >= Duration::from_secs(seconds) {
                 let mut data = vec![];
 
-                let mut inner = inner.lock();
-                for (key, tput) in &mut inner.throughput {
+                let inner = inner.lock();
+                for (key, tput) in &inner.throughput {
                     let current = tput.current();
                     let (p50, p75, p95) = tput.percentiles();
                     data.push(vec![
@@ -371,10 +382,10 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
     metrics_mod.set(
         "get_throughput",
         lua.create_function(|_, _: ()| {
-            let mut inner = INNER.lock();
+            let inner = INNER.lock();
             let counters: HashMap<String, HashMap<String, u64>> = inner
                 .throughput
-                .iter_mut()
+                .iter()
                 .map(|(k, tput)| {
                     let mut res = HashMap::new();
                     res.insert("current".to_string(), tput.current());

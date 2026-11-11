@@ -150,7 +150,10 @@ impl Screen {
                 // line and it won't resize with the line correctly.
                 // Put it back on the prior line. The cursor is now
                 // technically outside of the viewport width.
-                if adjusted_cursor.0 == 0 && adjusted_cursor.1 > 0 {
+                // Only do this when the cursor wrapped onto a later row
+                // of its own logical line (num_lines > 0); a cursor at
+                // the start of an unwrapped line must stay put.
+                if adjusted_cursor.0 == 0 && num_lines > 0 {
                     if physical_cols < self.physical_cols {
                         // getting smaller: preserve its original position
                         // on the prior line

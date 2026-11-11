@@ -29,8 +29,8 @@ Set it to `0` to turn the wait off.
 config.macos_live_resize_repaint_wait_ms = 8
 ```
 
-This works best with [front_end](front_end.md) set to `"WebGpu"`, which
-presents each live-resize step in step with the window.
+wezterm presents each live-resize step in step with the window, so the
+redrawn screen appears together with the new window size.
 
 For panes in a unix [multiplexer domain](../../../multiplexing.md), the
 mux server does the waiting: it resizes the pane, waits on the same signals

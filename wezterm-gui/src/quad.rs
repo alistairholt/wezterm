@@ -41,9 +41,6 @@ pub struct Vertex {
     pub has_color: f32,
     pub mix_value: f32,
 }
-::window::glium::implement_vertex!(
-    Vertex, position, tex, fg_color, alt_color, hsv, has_color, mix_value
-);
 
 impl Vertex {
     const ATTRIBS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
@@ -215,14 +212,13 @@ pub trait QuadAllocator {
 pub trait TripleLayerQuadAllocatorTrait {
     fn allocate(&mut self, layer_num: usize) -> anyhow::Result<QuadImpl<'_>>;
     fn extend_with(&mut self, layer_num: usize, vertices: &[Vertex]);
+    /// Appends quads kept in the compact form used by the line quad cache.
+    fn extend_with_quads(&mut self, layer_num: usize, quads: &[BoxedQuad]);
 }
 
-/// We prefer to allocate a quad at a time for HeapQuadAllocator
-/// because we tend to end up with fairly large arrays of Vertex
-/// and the total amount of contiguous memory is in the MB range,
-/// which is a bit gnarly to reallocate, and can waste several MB
-/// in unused capacity
-#[derive(Default)]
+/// The compact form of a quad that HeapQuadAllocator keeps for the line
+/// quad cache: 84 bytes instead of the 272 bytes of its four vertices.
+#[derive(Default, Clone, Copy)]
 pub struct BoxedQuad {
     position: (f32, f32, f32, f32),
     fg_color: [f32; 4],
@@ -279,40 +275,50 @@ impl BoxedQuad {
         }
     }
 
+    /// Writes this quad's four vertices into `out`, which must hold
+    /// exactly `VERTICES_PER_CELL` vertices.
+    #[inline]
+    pub(crate) fn write_vertices(&self, out: &mut [Vertex]) {
+        let (x1, x2, y1, y2) = self.tex;
+        let (left, top, right, bottom) = self.position;
+        let corner = |position: [f32; 2], tex: [f32; 2]| Vertex {
+            position,
+            tex,
+            fg_color: self.fg_color,
+            alt_color: self.alt_color,
+            hsv: self.hsv,
+            has_color: self.has_color,
+            mix_value: self.mix_value,
+        };
+        out[V_TOP_LEFT] = corner([left, top], [x1, y1]);
+        out[V_TOP_RIGHT] = corner([right, top], [x2, y1]);
+        out[V_BOT_LEFT] = corner([left, bottom], [x1, y2]);
+        out[V_BOT_RIGHT] = corner([right, bottom], [x2, y2]);
+    }
+
+    #[cfg(test)]
     fn to_vertices(&self) -> [Vertex; VERTICES_PER_CELL] {
         let mut vert: [Vertex; VERTICES_PER_CELL] = Default::default();
-        let mut quad = Quad { vert: &mut vert };
-
-        let (x1, x2, y1, y2) = self.tex;
-        quad.set_texture_discrete(x1, x2, y1, y2);
-
-        let (left, top, right, bottom) = self.position;
-        quad.set_position(left, top, right, bottom);
-
-        quad.set_has_color_impl(self.has_color);
-        let [hue, saturation, brightness] = self.hsv;
-        quad.set_hsv(Some(HsbTransform {
-            hue,
-            saturation,
-            brightness,
-        }));
-        quad.set_fg_color(LinearRgba::with_components(
-            self.fg_color[0],
-            self.fg_color[1],
-            self.fg_color[2],
-            self.fg_color[3],
-        ));
-        quad.set_alt_color_and_mix_value(self.alt_color.into(), self.mix_value);
-
+        self.write_vertices(&mut vert);
         vert
     }
 }
 
+/// Holds the quads for one line in the line quad cache.
+///
+/// Each layer is one flat Vec. Quads used to be boxed one at a time,
+/// which cost a malloc per glyph when a line was drawn and a free per
+/// glyph when its cache entry was replaced: about 0.3ms per frame while
+/// output scrolls.
+///
+/// A line is built into a scratch allocator that the caller reuses, so
+/// its Vecs don't grow (and reallocate) from empty for every line, and
+/// then `to_compact` copies it once into exact-size Vecs for the cache.
 #[derive(Default)]
 pub struct HeapQuadAllocator {
-    layer0: Vec<Box<BoxedQuad>>,
-    layer1: Vec<Box<BoxedQuad>>,
-    layer2: Vec<Box<BoxedQuad>>,
+    layer0: Vec<BoxedQuad>,
+    layer1: Vec<BoxedQuad>,
+    layer2: Vec<BoxedQuad>,
 }
 
 impl std::fmt::Debug for HeapQuadAllocator {
@@ -322,14 +328,28 @@ impl std::fmt::Debug for HeapQuadAllocator {
 }
 
 impl HeapQuadAllocator {
+    /// Empties every layer, keeping the allocated capacity.
+    pub fn clear(&mut self) {
+        self.layer0.clear();
+        self.layer1.clear();
+        self.layer2.clear();
+    }
+
+    /// Returns a copy with no spare capacity, to keep in a cache.
+    pub fn to_compact(&self) -> Self {
+        Self {
+            layer0: self.layer0.to_vec(),
+            layer1: self.layer1.to_vec(),
+            layer2: self.layer2.to_vec(),
+        }
+    }
+
     pub fn apply_to(&self, other: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
         let start = std::time::Instant::now();
         for (layer_num, quads) in [(0, &self.layer0), (1, &self.layer1), (2, &self.layer2)] {
-            for quad in quads {
-                other.extend_with(layer_num, &quad.to_vertices());
-            }
+            other.extend_with_quads(layer_num, quads);
         }
-        metrics::histogram!("quad_buffer_apply").record(start.elapsed());
+        crate::stats::cached_histogram!("quad_buffer_apply").record(start.elapsed());
         Ok(())
     }
 }
@@ -343,7 +363,7 @@ impl TripleLayerQuadAllocatorTrait for HeapQuadAllocator {
             _ => unreachable!(),
         };
 
-        quads.push(Box::new(BoxedQuad::default()));
+        quads.push(BoxedQuad::default());
 
         let quad = quads.last_mut().unwrap();
         Ok(QuadImpl::Boxed(quad))
@@ -368,9 +388,17 @@ impl TripleLayerQuadAllocatorTrait for HeapQuadAllocator {
         let src_quads: &[[Vertex; VERTICES_PER_CELL]] =
             unsafe { std::slice::from_raw_parts(vertices.as_ptr().cast(), vertices.len() / 4) };
 
-        for quad in src_quads {
-            dest_quads.push(Box::new(BoxedQuad::from_vertices(quad)));
-        }
+        dest_quads.extend(src_quads.iter().map(BoxedQuad::from_vertices));
+    }
+
+    fn extend_with_quads(&mut self, layer_num: usize, quads: &[BoxedQuad]) {
+        let dest_quads = match layer_num {
+            0 => &mut self.layer0,
+            1 => &mut self.layer1,
+            2 => &mut self.layer2,
+            _ => unreachable!(),
+        };
+        dest_quads.extend_from_slice(quads);
     }
 }
 
@@ -393,6 +421,13 @@ impl<'a> TripleLayerQuadAllocatorTrait for TripleLayerQuadAllocator<'a> {
             Self::Heap(h) => h.extend_with(layer_num, vertices),
         }
     }
+
+    fn extend_with_quads(&mut self, layer_num: usize, quads: &[BoxedQuad]) {
+        match self {
+            Self::Gpu(b) => b.extend_with_quads(layer_num, quads),
+            Self::Heap(h) => h.extend_with_quads(layer_num, quads),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -400,4 +435,48 @@ impl<'a> TripleLayerQuadAllocatorTrait for TripleLayerQuadAllocator<'a> {
 fn size() {
     assert_eq!(std::mem::size_of::<Vertex>() * VERTICES_PER_CELL, 272);
     assert_eq!(std::mem::size_of::<BoxedQuad>(), 84);
+}
+
+/// Writing a cached quad straight into vertices must give the same
+/// vertices as building them with the `Quad` setters, which is how the
+/// GPU path fills quads that aren't cached.
+#[cfg(test)]
+#[test]
+fn boxed_quad_vertices_match_quad_setters() {
+    let boxed = BoxedQuad {
+        position: (1., 2., 3., 4.),
+        fg_color: [0.1, 0.2, 0.3, 0.4],
+        alt_color: [0.5, 0.6, 0.7, 0.8],
+        tex: (0.25, 0.75, 0.125, 0.875),
+        hsv: [0.9, 1.0, 1.1],
+        has_color: IS_COLOR_EMOJI,
+        mix_value: 0.5,
+    };
+
+    let mut expected: [Vertex; VERTICES_PER_CELL] = Default::default();
+    let mut quad = Quad {
+        vert: &mut expected,
+    };
+    quad.set_texture_discrete(0.25, 0.75, 0.125, 0.875);
+    quad.set_position(1., 2., 3., 4.);
+    quad.set_has_color_impl(IS_COLOR_EMOJI);
+    quad.set_hsv(Some(HsbTransform {
+        hue: 0.9,
+        saturation: 1.0,
+        brightness: 1.1,
+    }));
+    quad.set_fg_color(LinearRgba::with_components(0.1, 0.2, 0.3, 0.4));
+    quad.set_alt_color_and_mix_value(LinearRgba::with_components(0.5, 0.6, 0.7, 0.8), 0.5);
+
+    let actual = boxed.to_vertices();
+    for (a, e) in actual.iter().zip(expected.iter()) {
+        assert_eq!(bytemuck::bytes_of(a), bytemuck::bytes_of(e));
+    }
+
+    // And the compact form survives a round trip through vertices.
+    let back = BoxedQuad::from_vertices(&actual);
+    assert_eq!(
+        bytemuck::cast_slice::<Vertex, u8>(&back.to_vertices()),
+        bytemuck::cast_slice::<Vertex, u8>(&actual)
+    );
 }

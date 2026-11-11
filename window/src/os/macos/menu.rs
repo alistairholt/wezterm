@@ -357,6 +357,14 @@ impl MenuItem {
         unsafe { RepresentedItem::ref_item(*wrapper) }
     }
 
+    /// Show or hide the checkmark next to the item.
+    pub fn set_state(&self, on: bool) {
+        let state: NSInteger = if on { 1 } else { 0 };
+        unsafe {
+            let () = msg_send![*self.item, setState: state];
+        }
+    }
+
     pub fn set_key_equiv_modifier_mask(&self, mods: NSEventModifierFlags) {
         unsafe {
             let () = msg_send![*self.item, setKeyEquivalentModifierMask: mods];

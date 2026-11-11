@@ -39,8 +39,7 @@ pub fn confirm_close_tab(
         &mut term,
     )? {
         promise::spawn::spawn_into_main_thread(async move {
-            let mux = Mux::get();
-            mux.remove_tab(tab_id);
+            crate::termwindow::close_tab_with_undo(tab_id);
         })
         .detach();
     }

@@ -188,6 +188,82 @@ enum OnlyKeyBindings {
 }
 
 impl super::TermWindow {
+    /// The other panes in `pane`'s tab that should get a copy of its
+    /// input, because Broadcast Input is on for the active tab. Empty
+    /// when it is off, or when `pane` is an overlay such as copy mode.
+    /// Panes showing their own overlay are skipped.
+    pub fn broadcast_input_targets(&self, pane: &Arc<dyn Pane>) -> Vec<Arc<dyn Pane>> {
+        // Overlays such as copy mode and Quick Select report the id of
+        // the pane underneath them, so check for an overlay explicitly.
+        if self.pane_state(pane.pane_id()).overlay.is_some() {
+            return vec![];
+        }
+        let mux = mux::Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return vec![],
+        };
+        if !self.tab_state(tab.tab_id()).broadcast_input {
+            return vec![];
+        }
+        let panes = tab.iter_panes_ignoring_zoom();
+        if !panes.iter().any(|p| p.pane.pane_id() == pane.pane_id()) {
+            return vec![];
+        }
+        panes
+            .into_iter()
+            .map(|p| p.pane)
+            .filter(|p| {
+                p.pane_id() != pane.pane_id() && self.pane_state(p.pane_id()).overlay.is_none()
+            })
+            .collect()
+    }
+
+    /// Send a key to a pane, encoded for whatever keyboard protocol
+    /// that pane has asked for.
+    fn send_key_to_pane(
+        &self,
+        pane: &Arc<dyn Pane>,
+        key_event: Option<&KeyEvent>,
+        key: termwiz::input::KeyCode,
+        modifiers: Modifiers,
+        is_down: bool,
+    ) -> anyhow::Result<()> {
+        if let Some(key_event) = key_event {
+            if let Some(encoded) = self.encode_win32_input(pane, key_event) {
+                if self.config.debug_key_events {
+                    log::info!("win32: Encoded input as {:?}", encoded);
+                }
+                return pane
+                    .writer()
+                    .write_all(encoded.as_bytes())
+                    .context("sending win32-input-mode encoded data");
+            }
+            if let Some(encoded) = self.encode_kitty_input(pane, key_event) {
+                if self.config.debug_key_events {
+                    log::info!("kitty: Encoded input as {:?}", encoded);
+                }
+                return pane
+                    .writer()
+                    .write_all(encoded.as_bytes())
+                    .context("sending kitty encoded data");
+            }
+        }
+        if self.config.debug_key_events {
+            log::info!(
+                "send to pane {} key={:?} mods={:?}",
+                if is_down { "DOWN" } else { "UP" },
+                key,
+                modifiers
+            );
+        }
+        if is_down {
+            pane.key_down(key, modifiers)
+        } else {
+            pane.key_up(key, modifiers)
+        }
+    }
+
     fn encode_win32_input(&self, pane: &Arc<dyn Pane>, key: &KeyEvent) -> Option<String> {
         if !self.config.allow_win32_input_mode
             || pane.get_keyboard_encoding() != KeyboardEncoding::Win32
@@ -356,50 +432,18 @@ impl super::TermWindow {
                         && !(config.send_composed_key_when_left_alt_is_pressed
                              || config.send_composed_key_when_right_alt_is_pressed));
 
-            if bypass_compose {
+            // A lone modifier key (Option itself) is handled at the end of
+            // key_event_impl. Sending it to the pane here would reach
+            // overlays such as copy mode and cancel a pending jump.
+            if bypass_compose && !keycode.is_modifier() {
                 if let Key::Code(term_key) = self.win_key_code_to_termwiz_key_code(keycode) {
-                    let tw_raw_modifiers = raw_modifiers;
-
-                    let mut did_encode = false;
-                    if let Some(key_event) = key_event {
-                        if let Some(encoded) = self.encode_win32_input(&pane, &key_event) {
-                            if self.config.debug_key_events {
-                                log::info!("win32: Encoded input as {:?}", encoded);
-                            }
-                            pane.writer()
-                                .write_all(encoded.as_bytes())
-                                .context("sending win32-input-mode encoded data")
-                                .ok();
-                            did_encode = true;
-                        } else if let Some(encoded) = self.encode_kitty_input(&pane, &key_event) {
-                            if self.config.debug_key_events {
-                                log::info!("kitty: Encoded input as {:?}", encoded);
-                            }
-                            pane.writer()
-                                .write_all(encoded.as_bytes())
-                                .context("sending kitty encoded data")
-                                .ok();
-                            did_encode = true;
-                        }
-                    };
-                    if !did_encode {
-                        if self.config.debug_key_events {
-                            log::info!(
-                                "{:?} {:?} -> send to pane {:?} {:?}",
-                                keycode,
-                                raw_modifiers,
-                                term_key,
-                                tw_raw_modifiers
-                            );
-                        }
-
-                        did_encode = if is_down {
-                            pane.key_down(term_key, tw_raw_modifiers)
-                        } else {
-                            pane.key_up(term_key, tw_raw_modifiers)
-                        }
+                    let did_encode = self
+                        .send_key_to_pane(&pane, key_event, term_key, raw_modifiers, is_down)
                         .is_ok();
-                    };
+                    for target in self.broadcast_input_targets(&pane) {
+                        self.send_key_to_pane(&target, key_event, term_key, raw_modifiers, is_down)
+                            .ok();
+                    }
 
                     if did_encode {
                         if is_down
@@ -642,6 +686,31 @@ impl super::TermWindow {
             return;
         }
 
+        // A modifier key pressed or released on its own only matters to
+        // an app that asked the kitty keyboard protocol for it. Don't let
+        // it reach overlays such as copy mode (where it would cancel a
+        // pending jump) or end an `until_unknown` key table. While a modal
+        // such as the command palette has focus, the pane gets nothing.
+        if window_key.key.is_modifier() {
+            if self.get_modal().is_some() {
+                return;
+            }
+            let targets = self.broadcast_input_targets(&pane);
+            for pane in std::iter::once(&pane).chain(targets.iter()) {
+                if let Some(encoded) = self.encode_kitty_input(pane, &window_key) {
+                    if !encoded.is_empty() {
+                        if self.config.debug_key_events {
+                            log::info!("kitty: Encoded input as {:?}", encoded);
+                        }
+                        if let Err(err) = pane.writer().write_all(encoded.as_bytes()) {
+                            log::error!("sending kitty encoded data: {err:#}");
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
         // If we get here, then none of the keys matched
         // any key table rules. Therefore, we should pop all `until_unknown`
         // entries from the stack.
@@ -671,36 +740,23 @@ impl super::TermWindow {
                     return;
                 }
 
-                let res = if let Some(encoded) = self.encode_win32_input(&pane, &window_key) {
-                    if self.config.debug_key_events {
-                        log::info!("win32: Encoded input as {:?}", encoded);
-                    }
-                    pane.writer()
-                        .write_all(encoded.as_bytes())
-                        .context("sending win32-input-mode encoded data")
-                } else if let Some(encoded) = self.encode_kitty_input(&pane, &window_key) {
-                    if self.config.debug_key_events {
-                        log::info!("kitty: Encoded input as {:?}", encoded);
-                    }
-                    pane.writer()
-                        .write_all(encoded.as_bytes())
-                        .context("sending kitty encoded data")
-                } else {
-                    if self.config.debug_key_events {
-                        log::info!(
-                            "send to pane {} key={:?} mods={:?}",
-                            if window_key.key_is_down { "DOWN" } else { "UP" },
-                            key,
-                            modifiers
-                        );
-                    }
-
-                    if window_key.key_is_down {
-                        pane.key_down(key, modifiers)
-                    } else {
-                        pane.key_up(key, modifiers)
-                    }
-                };
+                let res = self.send_key_to_pane(
+                    &pane,
+                    Some(&window_key),
+                    key,
+                    modifiers,
+                    window_key.key_is_down,
+                );
+                for target in self.broadcast_input_targets(&pane) {
+                    self.send_key_to_pane(
+                        &target,
+                        Some(&window_key),
+                        key,
+                        modifiers,
+                        window_key.key_is_down,
+                    )
+                    .ok();
+                }
 
                 if res.is_ok() {
                     if window_key.key_is_down
@@ -737,6 +793,9 @@ impl super::TermWindow {
                 }
                 if let Err(err) = pane.send_composed_text(&s) {
                     log::error!("failed to send composed text to pane: {err:#}");
+                }
+                for target in self.broadcast_input_targets(&pane) {
+                    target.send_composed_text(&s).ok();
                 }
                 self.maybe_scroll_to_bottom_for_input(&pane);
                 context.invalidate();

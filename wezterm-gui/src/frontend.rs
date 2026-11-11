@@ -70,6 +70,9 @@ impl GuiFrontEnd {
                 | MuxNotification::WindowCreated(_)
                 | MuxNotification::WindowRemoved(_) => {
                     promise::spawn::spawn_into_main_thread(async move {
+                        if Mux::get().iter_windows().is_empty() {
+                            crate::termwindow::discard_closed_tabs();
+                        }
                         let fe = crate::frontend::front_end();
                         if !fe.is_switching_workspace() {
                             fe.reconcile_workspace();
@@ -227,7 +230,9 @@ impl GuiFrontEnd {
 
         // And build the initial menu bar.
         // TODO: arrange for this to happen on config reload.
+        crate::commands::CommandDef::apply_secure_keyboard_entry_config(&config::configuration());
         crate::commands::CommandDef::recreate_menubar(&config::configuration());
+        apply_global_hotkey_config(&config::configuration());
 
         Ok(front_end)
     }
@@ -236,6 +241,10 @@ impl GuiFrontEnd {
         log::trace!("Got app event {event:?}");
         match event {
             ApplicationEvent::OpenCommandScript(file_name) => {
+                // Info.plist lists folders as a document type, so Finder
+                // and `open -a WezTerm DIR` send directories here too.
+                // Open a shell in the folder rather than running it.
+                let is_dir = std::path::Path::new(&file_name).is_dir();
                 let quoted_file_name = match shlex::try_quote(&file_name) {
                     Ok(name) => name.to_owned().to_string(),
                     Err(_) => {
@@ -248,20 +257,35 @@ impl GuiFrontEnd {
                 };
                 promise::spawn::spawn(async move {
                     use config::keyassignment::SpawnTabDomain;
-                    use wezterm_term::TerminalSize;
 
-                    // We send the script to execute to the shell on stdin, rather than ask the
-                    // shell to execute it directly, so that we start the shell and read in the
-                    // user's rc files before running the script.  Without this, wezterm on macOS
-                    // is launched with a default and very anemic path, and that is frustrating for
-                    // users.
+                    // Run the script through the user's shell as a login,
+                    // interactive shell, so it reads the user's rc files
+                    // first. Without them, wezterm on macOS is launched with
+                    // a very bare PATH. This used to type the command into
+                    // a new shell instead, but shells that discard input
+                    // typed before their first prompt then never ran it.
 
                     let mux = Mux::get();
                     let window_id = None;
                     let pane_id = None;
-                    let cmd = None;
-                    let cwd = None;
+                    let cmd = if is_dir {
+                        None
+                    } else {
+                        let shell = portable_pty::CommandBuilder::new_default_prog().get_shell();
+                        let mut cmd = portable_pty::CommandBuilder::new(shell);
+                        cmd.args(["-l", "-i", "-c", &quoted_file_name]);
+                        Some(cmd)
+                    };
+                    let cwd = if is_dir {
+                        Some(file_name.clone())
+                    } else {
+                        None
+                    };
                     let workspace = mux.active_workspace();
+                    let config = config::configuration();
+                    let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi());
+                    let size =
+                        config.initial_size(dpi as u32, crate::cell_pixel_dims(&config, dpi).ok());
 
                     match mux
                         .spawn_tab_or_window(
@@ -269,7 +293,7 @@ impl GuiFrontEnd {
                             SpawnTabDomain::DomainName("local".to_string()),
                             cmd,
                             cwd,
-                            TerminalSize::default(),
+                            size,
                             pane_id,
                             workspace,
                             None, // optional position
@@ -278,8 +302,6 @@ impl GuiFrontEnd {
                     {
                         Ok((_tab, pane, _window_id)) => {
                             log::trace!("Spawned {file_name} as pane_id {}", pane.pane_id());
-                            let mut writer = pane.writer();
-                            write!(writer, "{quoted_file_name} ; exit\n").ok();
                         }
                         Err(err) => {
                             log::error!("Failed to spawn {file_name}: {err:#?}");
@@ -289,10 +311,9 @@ impl GuiFrontEnd {
                 .detach();
             }
             ApplicationEvent::PerformKeyAssignment(action) => {
-                // We should only get here when there are no windows open
-                // and the user picks an action from the menubar.
-                // This is not currently possible, but could be in the
-                // future.
+                // We get here when there is no window to perform the
+                // action in: a menubar action with no windows open, or a
+                // Services menu item (New WezTerm Tab/Window Here).
 
                 fn spawn_command(spawn: &SpawnCommand, spawn_where: SpawnWhere) {
                     let config = config::configuration();
@@ -301,7 +322,22 @@ impl GuiFrontEnd {
                         config.initial_size(dpi as u32, crate::cell_pixel_dims(&config, dpi).ok());
                     let term_config = Arc::new(config::TermConfig::with_config(config));
 
-                    crate::spawn::spawn_command_impl(spawn, spawn_where, size, None, term_config)
+                    // A new tab goes into the window you last used, if any.
+                    let src_window_id = match spawn_where {
+                        SpawnWhere::NewTab => try_front_end().and_then(|fe| {
+                            Mux::get()
+                                .resolve_focused_pane(&fe.client_id)
+                                .map(|(_domain, window_id, _tab, _pane)| window_id)
+                        }),
+                        _ => None,
+                    };
+                    crate::spawn::spawn_command_impl(
+                        spawn,
+                        spawn_where,
+                        size,
+                        src_window_id,
+                        term_config,
+                    )
                 }
 
                 match action {
@@ -540,6 +576,17 @@ impl Drop for WorkspaceSwitcher {
     }
 }
 
+/// Register macos_global_hotkey, or remove it when it isn't set.
+fn apply_global_hotkey_config(config: &config::ConfigHandle) {
+    let hotkey = config
+        .macos_global_hotkey
+        .as_ref()
+        .map(|hotkey| (hotkey.key.resolve(config.key_map_preference), hotkey.mods));
+    if let Err(err) = ::window::os::macos::global_hotkey::set_global_hotkey(hotkey) {
+        log::error!("macos_global_hotkey: {err:#}");
+    }
+}
+
 pub fn shutdown() {
     FRONT_END.with(|f| drop(f.borrow_mut().take()));
 }
@@ -551,7 +598,10 @@ pub fn try_new() -> Result<Rc<GuiFrontEnd>, Error> {
     let config_subscription = config::subscribe_to_config_reload({
         move || {
             promise::spawn::spawn_into_main_thread(async {
-                crate::commands::CommandDef::recreate_menubar(&config::configuration());
+                let config = config::configuration();
+                crate::commands::CommandDef::apply_secure_keyboard_entry_config(&config);
+                crate::commands::CommandDef::recreate_menubar(&config);
+                apply_global_hotkey_config(&config);
             })
             .detach();
             true

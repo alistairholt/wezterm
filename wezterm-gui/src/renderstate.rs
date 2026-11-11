@@ -4,246 +4,156 @@ use super::utilsprites::{RenderMetrics, UtilSprites};
 use crate::termwindow::webgpu::{adapter_info_to_gpu_info, WebGpuState, WebGpuTexture};
 use ::window::bitmaps::atlas::OutOfTextureSpace;
 use ::window::bitmaps::Texture2d;
-use ::window::glium::backend::Context as GliumContext;
-use ::window::glium::buffer::{BufferMutSlice, Mapping};
-use ::window::glium::{
-    CapabilitiesSource, IndexBuffer as GliumIndexBuffer, VertexBuffer as GliumVertexBuffer,
-};
-use ::window::*;
 use anyhow::Context;
 use std::cell::{Ref, RefCell, RefMut};
-use std::convert::TryInto;
 use std::rc::Rc;
 use wezterm_font::FontConfiguration;
 use wgpu::util::DeviceExt;
 
 const INDICES_PER_CELL: usize = 6;
 
+/// The GPU state that render resources are allocated from.
 #[derive(Clone)]
-pub enum RenderContext {
-    Glium(Rc<GliumContext>),
-    WebGpu(Rc<WebGpuState>),
-}
-
-pub enum RenderFrame<'a> {
-    Glium(&'a mut glium::Frame),
-    WebGpu,
-}
+pub struct RenderContext(Rc<WebGpuState>);
 
 impl RenderContext {
-    pub fn allocate_index_buffer(&self, indices: &[u32]) -> anyhow::Result<IndexBuffer> {
-        match self {
-            Self::Glium(context) => Ok(IndexBuffer::Glium(GliumIndexBuffer::new(
-                context,
-                glium::index::PrimitiveType::TrianglesList,
-                indices,
-            )?)),
-            Self::WebGpu(state) => Ok(IndexBuffer::WebGpu(WebGpuIndexBuffer::new(indices, state))),
-        }
+    pub fn new(state: Rc<WebGpuState>) -> Self {
+        Self(state)
     }
 
-    pub fn allocate_vertex_buffer_initializer(&self, num_quads: usize) -> Vec<Vertex> {
-        match self {
-            Self::Glium(_) => {
-                vec![Vertex::default(); num_quads * VERTICES_PER_CELL]
-            }
-            Self::WebGpu(_) => vec![],
-        }
+    pub fn allocate_index_buffer(&self, indices: &[u32]) -> WebGpuIndexBuffer {
+        WebGpuIndexBuffer::new(indices, &self.0)
     }
 
-    pub fn allocate_vertex_buffer(
-        &self,
-        num_quads: usize,
-        initializer: &[Vertex],
-    ) -> anyhow::Result<VertexBuffer> {
-        match self {
-            Self::Glium(context) => Ok(VertexBuffer::Glium(GliumVertexBuffer::dynamic(
-                context,
-                initializer,
-            )?)),
-            Self::WebGpu(state) => Ok(VertexBuffer::WebGpu(WebGpuVertexBuffer::new(
-                num_quads * VERTICES_PER_CELL,
-                state,
-            ))),
-        }
+    pub fn allocate_vertex_buffer(&self, num_quads: usize) -> WebGpuVertexBuffer {
+        WebGpuVertexBuffer::new(num_quads * VERTICES_PER_CELL, &self.0)
     }
 
     pub fn allocate_texture_atlas(&self, size: usize) -> anyhow::Result<Rc<dyn Texture2d>> {
-        match self {
-            Self::Glium(context) => {
-                let caps = context.get_capabilities();
-                // You'd hope that allocating a texture would automatically
-                // include this check, but it doesn't, and instead, the texture
-                // silently fails to bind when attempting to render into it later.
-                // So! We check and raise here for ourselves!
-                let max_texture_size: usize = caps
-                    .max_texture_size
-                    .try_into()
-                    .context("represent Capabilities.max_texture_size as usize")?;
-                if size > max_texture_size {
-                    anyhow::bail!(
-                        "Cannot use a texture of size {} as it is larger \
-                         than the max {} supported by your GPU",
-                        size,
-                        caps.max_texture_size
-                    );
-                }
-                use crate::glium::texture::SrgbTexture2d;
-                let surface: Rc<dyn Texture2d> = Rc::new(SrgbTexture2d::empty_with_format(
-                    context,
-                    glium::texture::SrgbFormat::U8U8U8U8,
-                    glium::texture::MipmapsOption::NoMipmap,
-                    size as u32,
-                    size as u32,
-                )?);
-                Ok(surface)
-            }
-            Self::WebGpu(state) => {
-                let texture: Rc<dyn Texture2d> =
-                    Rc::new(WebGpuTexture::new(size as u32, size as u32, state)?);
-                Ok(texture)
-            }
-        }
+        let texture: Rc<dyn Texture2d> =
+            Rc::new(WebGpuTexture::new(size as u32, size as u32, &self.0)?);
+        Ok(texture)
     }
 
     pub fn renderer_info(&self) -> String {
-        match self {
-            Self::Glium(ctx) => format!(
-                "OpenGL: {} {}",
-                ctx.get_opengl_renderer_string(),
-                ctx.get_opengl_version_string()
-            ),
-            Self::WebGpu(state) => {
-                let info = adapter_info_to_gpu_info(state.adapter_info.clone());
-                format!("WebGPU: {}", info.to_string())
-            }
-        }
-    }
-}
-
-pub enum IndexBuffer {
-    Glium(GliumIndexBuffer<u32>),
-    WebGpu(WebGpuIndexBuffer),
-}
-
-impl IndexBuffer {
-    pub fn glium(&self) -> &GliumIndexBuffer<u32> {
-        match self {
-            Self::Glium(g) => g,
-            _ => unreachable!(),
-        }
-    }
-    pub fn webgpu(&self) -> &WebGpuIndexBuffer {
-        match self {
-            Self::WebGpu(g) => g,
-            _ => unreachable!(),
-        }
-    }
-}
-
-pub enum VertexBuffer {
-    Glium(GliumVertexBuffer<Vertex>),
-    WebGpu(WebGpuVertexBuffer),
-}
-
-impl VertexBuffer {
-    pub fn glium(&self) -> &GliumVertexBuffer<Vertex> {
-        match self {
-            Self::Glium(g) => g,
-            _ => unreachable!(),
-        }
-    }
-    pub fn webgpu(&self) -> &WebGpuVertexBuffer {
-        match self {
-            Self::WebGpu(g) => g,
-            _ => unreachable!(),
-        }
-    }
-    pub fn webgpu_mut(&mut self) -> &mut WebGpuVertexBuffer {
-        match self {
-            Self::WebGpu(g) => g,
-            _ => unreachable!(),
-        }
-    }
-}
-
-enum MappedVertexBuffer {
-    Glium(GliumMappedVertexBuffer),
-    WebGpu(WebGpuMappedVertexBuffer),
-}
-
-impl MappedVertexBuffer {
-    fn slice_mut(&mut self, range: std::ops::Range<usize>) -> &mut [Vertex] {
-        match self {
-            Self::Glium(g) => &mut g.mapping[range],
-            Self::WebGpu(g) => {
-                let mapping: &mut [Vertex] = bytemuck::cast_slice_mut(&mut g.mapping);
-                &mut mapping[range]
-            }
-        }
+        let info = adapter_info_to_gpu_info(self.0.adapter_info.clone());
+        format!("WebGPU: {}", info.to_string())
     }
 }
 
 pub struct MappedQuads<'a> {
-    mapping: MappedVertexBuffer,
+    mapping: WebGpuMappedVertexBuffer,
     next: RefMut<'a, usize>,
     capacity: usize,
 }
 
-pub struct WebGpuMappedVertexBuffer {
-    mapping: wgpu::BufferViewMut<'static>,
-    // Owner mapping, must be dropped after mapping
-    _slice: wgpu::BufferSlice<'static>,
+impl<'a> MappedQuads<'a> {
+    /// Writes cached quads straight into the mapped buffer, without
+    /// building each quad's vertices on the stack and copying them in.
+    pub fn extend_with_quads(&mut self, quads: &[BoxedQuad]) {
+        let idx = *self.next;
+        *self.next += quads.len();
+        // As in extend_with: only copy in if there is enough room, and
+        // let the end of the render pass detect running out of space.
+        if idx + quads.len() <= self.capacity {
+            let start = idx * VERTICES_PER_CELL;
+            let end = start + quads.len() * VERTICES_PER_CELL;
+            for (quad, out) in quads
+                .iter()
+                .zip(self.mapping.mapping[start..end].chunks_exact_mut(VERTICES_PER_CELL))
+            {
+                quad.write_vertices(out);
+            }
+        }
+    }
 }
 
+pub struct WebGpuMappedVertexBuffer {
+    mapping: &'static mut [Vertex],
+    // Owner of the vertices, must be dropped after mapping
+    _owner: RefMut<'static, WebGpuVertexBuffer>,
+}
+
+/// A vertex buffer in shared (CPU and GPU visible) Metal memory that
+/// lives as long as its capacity doesn't change. Quads are written
+/// straight into it and the GPU reads them from there: no staging copy.
+///
+/// It replaces making a new mapped wgpu buffer each frame, which made
+/// wgpu allocate and zero-fill a staging buffer of the whole capacity
+/// and then copy all of it.
+///
+/// The CPU must not write while a submitted frame may still be reading,
+/// so `vertices_mut` first waits for the frame that last drew from it.
+/// TripleVertexBuffer rotates three of these, so that frame is three
+/// frames old and has almost always finished.
 pub struct WebGpuVertexBuffer {
     buf: wgpu::Buffer,
+    raw: metal::Buffer,
     num_vertices: usize,
+    /// The frame (WebGpuState::current_frame) that last drew from this.
+    last_frame: std::cell::Cell<Option<u64>>,
     state: Rc<WebGpuState>,
-}
-
-impl std::ops::Deref for WebGpuVertexBuffer {
-    type Target = wgpu::Buffer;
-    fn deref(&self) -> &Self::Target {
-        &self.buf
-    }
 }
 
 impl WebGpuVertexBuffer {
     pub fn new(num_vertices: usize, state: &Rc<WebGpuState>) -> Self {
+        use wgpu::hal::api::Metal;
+
+        // Metal can't make a 0 length buffer.
+        let size = (num_vertices * std::mem::size_of::<Vertex>()).max(256) as u64;
+        let raw_device = unsafe {
+            state
+                .device
+                .as_hal::<Metal, _, _>(|d| d.map(|d| d.raw_device().lock().clone()))
+        }
+        .expect("WebGpu device is Metal");
+        let raw = raw_device.new_buffer(
+            size,
+            metal::MTLResourceOptions::StorageModeShared
+                | metal::MTLResourceOptions::CPUCacheModeDefaultCache,
+        );
+        let buf = unsafe {
+            // wgpu treats a buffer from hal as fully initialized, so it
+            // never clears it over what we wrote.
+            let hal_buffer = wgpu::hal::metal::Device::buffer_from_raw(raw.clone(), size);
+            state.device.create_buffer_from_hal::<Metal>(
+                hal_buffer,
+                &wgpu::BufferDescriptor {
+                    label: Some("Vertex Buffer"),
+                    size,
+                    usage: wgpu::BufferUsages::VERTEX,
+                    mapped_at_creation: false,
+                },
+            )
+        };
         Self {
-            buf: state.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Vertex Buffer"),
-                size: (num_vertices * std::mem::size_of::<Vertex>()) as wgpu::BufferAddress,
-                usage: wgpu::BufferUsages::VERTEX,
-                mapped_at_creation: true,
-            }),
+            buf,
+            raw,
             num_vertices,
+            last_frame: std::cell::Cell::new(None),
             state: Rc::clone(state),
         }
     }
 
-    pub fn map(&self) -> WebGpuMappedVertexBuffer {
-        unsafe {
-            let slice = self.buf.slice(..).extend_lifetime();
-            let mapping = slice.get_mapped_range_mut();
-
-            WebGpuMappedVertexBuffer {
-                mapping,
-                _slice: slice,
-            }
+    /// The vertices, to fill in for the frame being built.
+    ///
+    /// # Safety
+    /// The slice points into `raw`; the caller must not use it after this
+    /// buffer is dropped or drawn from (`draw_slice`).
+    unsafe fn vertices_mut(&self) -> &'static mut [Vertex] {
+        if let Some(frame) = self.last_frame.get() {
+            self.state.wait_for_frame(frame);
         }
+        std::slice::from_raw_parts_mut(self.raw.contents() as *mut Vertex, self.num_vertices)
     }
 
-    pub fn recreate(&mut self) -> wgpu::Buffer {
-        let mut new_buf = self.state.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Vertex Buffer"),
-            size: (self.num_vertices * std::mem::size_of::<Vertex>()) as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::VERTEX,
-            mapped_at_creation: true,
-        });
-        std::mem::swap(&mut new_buf, &mut self.buf);
-        new_buf
+    /// The part of the buffer holding the first `vertex_count` vertices,
+    /// for drawing in the current frame.
+    pub fn draw_slice(&self, vertex_count: usize) -> wgpu::BufferSlice<'_> {
+        self.last_frame.set(Some(self.state.current_frame()));
+        let vertex_count = vertex_count.min(self.num_vertices);
+        self.buf
+            .slice(..(vertex_count * std::mem::size_of::<Vertex>()) as wgpu::BufferAddress)
     }
 }
 
@@ -272,16 +182,6 @@ impl WebGpuIndexBuffer {
     }
 }
 
-/// This is a self-referential struct, but since those are not possible
-/// to create safely in unstable rust, we transmute the lifetimes away
-/// to static and store the owner (RefMut) and the derived Mapping object
-/// in this struct
-pub struct GliumMappedVertexBuffer {
-    mapping: Mapping<'static, [Vertex]>,
-    // Drop the owner after the mapping
-    _owner: RefMut<'static, VertexBuffer>,
-}
-
 impl<'a> QuadAllocator for MappedQuads<'a> {
     fn allocate<'b>(&'b mut self) -> anyhow::Result<QuadImpl<'b>> {
         let idx = *self.next;
@@ -298,7 +198,7 @@ impl<'a> QuadAllocator for MappedQuads<'a> {
 
         let idx = idx * VERTICES_PER_CELL;
         let mut quad = Quad {
-            vert: self.mapping.slice_mut(idx..idx + VERTICES_PER_CELL),
+            vert: &mut self.mapping.mapping[idx..idx + VERTICES_PER_CELL],
         };
 
         quad.set_has_color(false);
@@ -318,17 +218,15 @@ impl<'a> QuadAllocator for MappedQuads<'a> {
         let idx = idx * VERTICES_PER_CELL;
         let capacity = self.capacity * VERTICES_PER_CELL;
         if idx + len <= capacity {
-            self.mapping
-                .slice_mut(idx..idx + len)
-                .copy_from_slice(vertices);
+            self.mapping.mapping[idx..idx + len].copy_from_slice(vertices);
         }
     }
 }
 
 pub struct TripleVertexBuffer {
     pub index: RefCell<usize>,
-    pub bufs: RefCell<[VertexBuffer; 3]>,
-    pub indices: IndexBuffer,
+    pub bufs: RefCell<[WebGpuVertexBuffer; 3]>,
+    pub indices: WebGpuIndexBuffer,
     pub capacity: usize,
     pub next_quad: RefCell<usize>,
 }
@@ -357,24 +255,8 @@ unsafe impl<'a, T: 'static> ExtendStatic for RefMut<'a, T> {
     }
 }
 
-unsafe impl<'a> ExtendStatic for wgpu::BufferSlice<'a> {
-    type T = wgpu::BufferSlice<'static>;
-    unsafe fn extend_lifetime(self) -> Self::T {
-        std::mem::transmute(self)
-    }
-}
-
 unsafe impl<'a> ExtendStatic for MappedQuads<'a> {
     type T = MappedQuads<'static>;
-    unsafe fn extend_lifetime(self) -> Self::T {
-        std::mem::transmute(self)
-    }
-}
-
-unsafe impl<'a, T: ?Sized + ::window::glium::buffer::Content + 'static> ExtendStatic
-    for BufferMutSlice<'a, T>
-{
-    type T = BufferMutSlice<'static, T>;
     unsafe fn extend_lifetime(self) -> Self::T {
         std::mem::transmute(self)
     }
@@ -400,33 +282,16 @@ impl TripleVertexBuffer {
     }
 
     pub fn map(&self) -> MappedQuads<'_> {
-        let mut bufs = self.current_vb_mut();
+        let bufs = self.current_vb_mut();
 
-        // To map the vertex buffer, we need to hold a mutable reference to
-        // the buffer and hold the mapping object alive for the duration
-        // of the access.  Rust doesn't allow us to create a struct that
-        // holds both of those things, because one references the other
-        // and it doesn't permit self-referential structs.
-        // We use the very blunt instrument "transmute" to force Rust to
-        // treat the lifetimes of both of these things as static, which
-        // we can then store in the same struct.
-        // This is "safe" because we carry them around together and ensure
-        // that the owner is dropped after the derived data.
-        let mapping = match &mut *bufs {
-            VertexBuffer::Glium(vb) => {
-                let buf_slice = unsafe {
-                    vb.slice_mut(..)
-                        .expect("to map vertex buffer")
-                        .extend_lifetime()
-                };
-                let mapping = buf_slice.map();
-
-                MappedVertexBuffer::Glium(GliumMappedVertexBuffer {
-                    _owner: bufs,
-                    mapping,
-                })
-            }
-            VertexBuffer::WebGpu(vb) => MappedVertexBuffer::WebGpu(vb.map()),
+        // The mapping points into the buffer owned by `bufs`, a RefMut
+        // whose lifetime has been extended to static. They travel together
+        // in WebGpuMappedVertexBuffer, which drops the owner after the
+        // mapping.
+        let mapping = unsafe { bufs.vertices_mut() };
+        let mapping = WebGpuMappedVertexBuffer {
+            mapping,
+            _owner: bufs,
         };
 
         MappedQuads {
@@ -436,7 +301,7 @@ impl TripleVertexBuffer {
         }
     }
 
-    pub fn current_vb_mut(&self) -> RefMut<'static, VertexBuffer> {
+    pub fn current_vb_mut(&self) -> RefMut<'static, WebGpuVertexBuffer> {
         let index = *self.index.borrow();
         let bufs = self.bufs.borrow_mut();
         unsafe { RefMut::map(bufs, |bufs| &mut bufs[index]).extend_lifetime() }
@@ -515,12 +380,7 @@ impl RenderLayer {
         context: &RenderContext,
         num_quads: usize,
     ) -> anyhow::Result<TripleVertexBuffer> {
-        let verts = context.allocate_vertex_buffer_initializer(num_quads);
-        log::trace!(
-            "compute_vertices num_quads={}, allocated {} bytes",
-            num_quads,
-            verts.len() * std::mem::size_of::<Vertex>()
-        );
+        log::trace!("compute_vertices num_quads={}", num_quads);
         let mut indices = vec![];
         indices.reserve(num_quads * INDICES_PER_CELL);
 
@@ -540,12 +400,12 @@ impl RenderLayer {
         let buffer = TripleVertexBuffer {
             index: RefCell::new(0),
             bufs: RefCell::new([
-                context.allocate_vertex_buffer(num_quads, &verts)?,
-                context.allocate_vertex_buffer(num_quads, &verts)?,
-                context.allocate_vertex_buffer(num_quads, &verts)?,
+                context.allocate_vertex_buffer(num_quads),
+                context.allocate_vertex_buffer(num_quads),
+                context.allocate_vertex_buffer(num_quads),
             ]),
             capacity: num_quads,
-            indices: context.allocate_index_buffer(&indices)?,
+            indices: context.allocate_index_buffer(&indices),
             next_quad: RefCell::new(0),
         };
 
@@ -568,13 +428,16 @@ impl TripleLayerQuadAllocatorTrait for BorrowedLayers {
     fn extend_with(&mut self, layer_num: usize, vertices: &[Vertex]) {
         self.layers[layer_num].extend_with(vertices)
     }
+
+    fn extend_with_quads(&mut self, layer_num: usize, quads: &[BoxedQuad]) {
+        self.layers[layer_num].extend_with_quads(quads)
+    }
 }
 
 pub struct RenderState {
     pub context: RenderContext,
     pub glyph_cache: RefCell<GlyphCache>,
     pub util_sprites: UtilSprites,
-    pub glyph_prog: Option<glium::Program>,
     pub layers: RefCell<Vec<Rc<RenderLayer>>>,
 }
 
@@ -590,20 +453,12 @@ impl RenderState {
             let result = UtilSprites::new(&mut *glyph_cache.borrow_mut(), metrics);
             match result {
                 Ok(util_sprites) => {
-                    let glyph_prog = match &context {
-                        RenderContext::Glium(context) => {
-                            Some(Self::compile_prog(&context, Self::glyph_shader)?)
-                        }
-                        RenderContext::WebGpu(_) => None,
-                    };
-
                     let main_layer = Rc::new(RenderLayer::new(&context, 1024, 0)?);
 
                     return Ok(Self {
                         context,
                         glyph_cache,
                         util_sprites,
-                        glyph_prog,
                         layers: RefCell::new(vec![main_layer]),
                     });
                 }
@@ -667,49 +522,6 @@ impl RenderState {
         }
 
         Ok(allocated)
-    }
-
-    fn compile_prog(
-        context: &Rc<GliumContext>,
-        fragment_shader: fn(&str) -> (String, String),
-    ) -> anyhow::Result<glium::Program> {
-        let mut errors = vec![];
-
-        let caps = context.get_capabilities();
-        log::trace!("Compiling shader. context.capabilities.srgb={}", caps.srgb);
-
-        for version in &["330 core", "330", "320 es", "300 es"] {
-            let (vertex_shader, fragment_shader) = fragment_shader(version);
-            let source = glium::program::ProgramCreationInput::SourceCode {
-                vertex_shader: &vertex_shader,
-                fragment_shader: &fragment_shader,
-                outputs_srgb: true,
-                tessellation_control_shader: None,
-                tessellation_evaluation_shader: None,
-                transform_feedback_varyings: None,
-                uses_point_size: false,
-                geometry_shader: None,
-            };
-            match glium::Program::new(context, source) {
-                Ok(prog) => {
-                    return Ok(prog);
-                }
-                Err(err) => errors.push(format!("shader version: {}: {:#}", version, err)),
-            };
-        }
-
-        anyhow::bail!("Failed to compile shaders: {}", errors.join("\n"))
-    }
-
-    fn glyph_shader(version: &str) -> (String, String) {
-        (
-            format!(
-                "#version {}\n{}",
-                version,
-                include_str!("glyph-vertex.glsl")
-            ),
-            format!("#version {}\n{}", version, include_str!("glyph-frag.glsl")),
-        )
     }
 
     pub fn config_changed(&mut self) {

@@ -13,7 +13,7 @@ use crate::frontend::FrontEndSelection;
 use crate::keyassignment::{
     KeyAssignment, KeyTable, KeyTableEntry, KeyTables, MouseEventTrigger, SpawnCommand,
 };
-use crate::keys::{Key, LeaderKey, Mouse};
+use crate::keys::{Key, KeyNoAction, LeaderKey, Mouse};
 use crate::lua::make_lua_context;
 use crate::ssh::{SshBackend, SshDomain};
 use crate::tls::{TlsDomainClient, TlsDomainServer};
@@ -132,6 +132,12 @@ pub struct Config {
     #[dynamic(default)]
     pub switch_to_last_active_tab_when_closing_tab: bool,
 
+    /// How long, in seconds, a closed tab is kept so UndoCloseTab can
+    /// bring it back, as in iTerm2. Its programs keep running until then.
+    /// 0 closes tabs at once.
+    #[dynamic(default = "default_undo_close_tab_seconds")]
+    pub undo_close_tab_seconds: u64,
+
     /// When true, launching a new wezterm instance will prefer
     /// to spawn a new tab into an existing instance.
     /// Otherwise, it will spawn a new window.
@@ -208,6 +214,11 @@ pub struct Config {
     )]
     pub scrollback_lines: usize,
 
+    /// The command, with arguments, that ShowScrollbackInPager runs.
+    /// It reads the scrollback, with escape sequences, on its standard input.
+    #[dynamic(default = "default_scrollback_pager")]
+    pub scrollback_pager: Vec<String>,
+
     /// If no `prog` is specified on the command line, use this
     /// instead of running the user's shell.
     /// For example, to have `wezterm` always run `top` by default,
@@ -251,6 +262,11 @@ pub struct Config {
     /// Specifies the height of a new window, expressed in character cells.
     #[dynamic(default = "default_initial_rows", validate = "validate_row_or_col")]
     pub initial_rows: u16,
+
+    /// Open new windows at the size, in cells, of the last window you
+    /// resized, instead of initial_cols and initial_rows.
+    #[dynamic(default)]
+    pub remember_window_size: bool,
 
     #[dynamic(default = "default_true")]
     pub enable_kitty_graphics: bool,
@@ -345,6 +361,8 @@ pub struct Config {
     #[dynamic(default = "default_harfbuzz_features")]
     pub harfbuzz_features: Vec<String>,
 
+    /// Accepted so that old configs load, but ignored: this fork always
+    /// renders with Metal.
     #[dynamic(default)]
     pub front_end: FrontEndSelection,
 
@@ -530,10 +548,8 @@ pub struct Config {
     #[dynamic(default)]
     pub enable_zwlr_output_manager: bool,
 
-    /// Whether to prefer EGL over other GL implementations.
-    /// EGL on Windows has jankier resize behavior than WGL (which
-    /// is used if EGL is unavailable), but EGL survives graphics
-    /// driver updates without breaking and losing your work.
+    /// Accepted so that old configs load, but ignored: this fork
+    /// doesn't use EGL or OpenGL.
     #[dynamic(default = "default_prefer_egl")]
     pub prefer_egl: bool,
 
@@ -733,6 +749,16 @@ pub struct Config {
     #[dynamic(default)]
     pub notification_handling: NotificationHandling,
 
+    /// Show a notification when a command that ran for at least
+    /// `notify_on_command_finish_after_secs` finishes. Needs the shell
+    /// integration, which reports commands through the WEZTERM_PROG
+    /// user variable.
+    #[dynamic(default)]
+    pub notify_on_command_finish: NotifyOnCommandFinish,
+
+    #[dynamic(default = "default_notify_on_command_finish_after_secs")]
+    pub notify_on_command_finish_after_secs: f64,
+
     #[dynamic(default = "default_true")]
     pub use_dead_keys: bool,
 
@@ -856,6 +882,53 @@ pub struct Config {
 
     #[dynamic(default)]
     pub audible_bell: AudibleBell,
+
+    /// Bounce the Dock icon when a bell rings while WezTerm isn't the
+    /// active app.
+    #[dynamic(default = "default_true")]
+    pub window_alert_on_bell: bool,
+
+    /// Text shown before a tab's title when a bell rang in that tab
+    /// while it wasn't the focused tab. Empty turns it off.
+    #[dynamic(default = "default_bell_on_tab")]
+    pub bell_on_tab: String,
+
+    /// Text shown before a tab's title when a pane in that tab printed
+    /// output you haven't seen. Empty (the default) turns it off.
+    #[dynamic(default)]
+    pub tab_activity_symbol: String,
+
+    /// Ask before pasting text with a line break into a program that
+    /// hasn't turned on bracketed paste.
+    #[dynamic(default = "default_true")]
+    pub confirm_multiline_paste: bool,
+
+    /// Ask before pasting more than this many bytes. 0 turns it off.
+    #[dynamic(default)]
+    pub confirm_large_paste_bytes: usize,
+
+    /// Badge the Dock icon with the number of tabs that have a bell
+    /// you haven't seen yet.
+    #[dynamic(default = "default_true")]
+    pub macos_dock_badge_on_bell: bool,
+
+    /// Turn on Secure Keyboard Entry at startup.
+    #[dynamic(default)]
+    pub macos_secure_keyboard_entry: bool,
+
+    /// Play this instead of the system beep for the audible bell: a
+    /// system sound name such as "Glass", or the path of a sound file.
+    #[dynamic(default)]
+    pub audible_bell_sound: Option<String>,
+
+    /// Draw a bar of this color behind the cursor's row in the active
+    /// pane, like iTerm2's cursor guide.
+    #[dynamic(default)]
+    pub cursor_guide_color: Option<RgbaColor>,
+
+    /// A system-wide hotkey that shows and hides WezTerm.
+    #[dynamic(default)]
+    pub macos_global_hotkey: Option<KeyNoAction>,
 
     #[dynamic(default)]
     pub canonicalize_pasted_newlines: Option<NewlineCanon>,
@@ -1017,7 +1090,7 @@ impl Config {
                         file_name: Some(path_item.path.clone()),
                         lua: None,
                         warnings: vec![],
-                    }
+                    };
                 }
                 Ok(None) => continue,
                 Ok(Some(loaded)) => return loaded,
@@ -1458,13 +1531,38 @@ impl Config {
         // the GUI has had a chance to update the pixel dimensions
         // when running under X11.
         // This is a bit gross.
+        let (cols, rows) = if self.remember_window_size {
+            crate::remembered_window_size().unwrap_or((self.initial_cols, self.initial_rows))
+        } else {
+            (self.initial_cols, self.initial_rows)
+        };
+        self.size_in_cells(cols, rows, dpi, cell_pixel_dims)
+    }
+
+    /// The size from initial_cols and initial_rows, ignoring
+    /// remember_window_size. Used to reset a window to its default size.
+    pub fn configured_initial_size(
+        &self,
+        dpi: u32,
+        cell_pixel_dims: Option<(usize, usize)>,
+    ) -> TerminalSize {
+        self.size_in_cells(self.initial_cols, self.initial_rows, dpi, cell_pixel_dims)
+    }
+
+    fn size_in_cells(
+        &self,
+        cols: u16,
+        rows: u16,
+        dpi: u32,
+        cell_pixel_dims: Option<(usize, usize)>,
+    ) -> TerminalSize {
         let (cell_pixel_width, cell_pixel_height) = cell_pixel_dims.unwrap_or((8, 16));
 
         TerminalSize {
-            rows: self.initial_rows as usize,
-            cols: self.initial_cols as usize,
-            pixel_width: cell_pixel_width * self.initial_cols as usize,
-            pixel_height: cell_pixel_height * self.initial_rows as usize,
+            rows: rows as usize,
+            cols: cols as usize,
+            pixel_width: cell_pixel_width * cols as usize,
+            pixel_height: cell_pixel_height * rows as usize,
             dpi,
         }
     }
@@ -1648,6 +1746,27 @@ fn default_initial_cols() -> u16 {
     80
 }
 
+// fancy_regex counts any `\b` or lookaround as "hard" and runs such a
+// rule in its own backtracking engine, from every position of every line
+// it scans: about 4-5 µs per line per rule, 0.5-0.9 ms per frame while
+// output scrolls. The rules below match exactly what the upstream rules
+// (`hyperlink::CLOSING_PARENTHESIS_HYPERLINK_PATTERN`,
+// `hyperlink::GENERIC_HYPERLINK_PATTERN` and the `\b`-delimited mailto
+// rule) match, without `\b` or lookaround, so the regex crate runs them
+// (about 40 ns per line):
+// - A leading `\b\w+` adds nothing: the leftmost match always starts at
+//   the first character of a run of word characters, which is a boundary.
+// - The closing-parenthesis lookahead `(?=\s|$|[^_/a-zA-Z0-9-])` becomes
+//   a match on that character outside capture group 1, and group 1 is the
+//   link.
+// - The mailto rule's trailing `[\w-]+\b` always ends after the last word
+//   character of the domain, which `\.[\w-]*\w` says directly.
+// default_rules_match_upstream_rules checks this on random lines.
+const CLOSING_PARENTHESIS_HYPERLINK_PATTERN: &str =
+    r"(\w+://[^\s()]*\(\S*\))(?:\s|$|[^_/a-zA-Z0-9-])";
+const GENERIC_HYPERLINK_PATTERN: &str = r"\w+://\S+[_/a-zA-Z0-9-]";
+const MAILTO_PATTERN: &str = r"\w+@[\w-]+(?:\.[\w-]+)*\.[\w-]*\w";
+
 pub fn default_hyperlink_rules() -> Vec<hyperlink::Rule> {
     vec![
         // First handle URLs wrapped with punctuation (i.e. brackets)
@@ -1657,11 +1776,11 @@ pub fn default_hyperlink_rules() -> Vec<hyperlink::Rule> {
         hyperlink::Rule::with_highlight(r"<(\w+://\S+)>", "$1", 1).unwrap(),
         // Then handle URLs not wrapped in brackets that
         // 1) have a balanced ending parenthesis or
-        hyperlink::Rule::new(hyperlink::CLOSING_PARENTHESIS_HYPERLINK_PATTERN, "$0").unwrap(),
+        hyperlink::Rule::with_highlight(CLOSING_PARENTHESIS_HYPERLINK_PATTERN, "$1", 1).unwrap(),
         // 2) include terminating _, / or - characters, if any
-        hyperlink::Rule::new(hyperlink::GENERIC_HYPERLINK_PATTERN, "$0").unwrap(),
+        hyperlink::Rule::new(GENERIC_HYPERLINK_PATTERN, "$0").unwrap(),
         // implicit mailto link
-        hyperlink::Rule::new(r"\b\w+@[\w-]+(\.[\w-]+)+\b", "mailto:$0").unwrap(),
+        hyperlink::Rule::new(MAILTO_PATTERN, "mailto:$0").unwrap(),
     ]
 }
 
@@ -1745,8 +1864,15 @@ fn default_anim_fps() -> u8 {
     10
 }
 
+/// Painting on macOS follows the display link, which never runs faster
+/// than the display, so 120 allows ProMotion rates without changing
+/// anything on 60Hz displays.
+fn default_undo_close_tab_seconds() -> u64 {
+    5
+}
+
 fn default_max_fps() -> u64 {
-    60
+    120
 }
 
 fn default_tiling_desktop_environments() -> Vec<String> {
@@ -2082,6 +2208,18 @@ pub enum ImePreeditRendering {
     System,
 }
 
+/// When to show a notification as a long command finishes.
+#[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NotifyOnCommandFinish {
+    #[default]
+    Never,
+    /// Only while the window isn't focused.
+    Unfocused,
+    /// While the window isn't focused, or the pane isn't on screen.
+    Invisible,
+    Always,
+}
+
 #[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NotificationHandling {
     #[default]
@@ -2129,6 +2267,106 @@ fn default_macos_forward_mods() -> Modifiers {
     Modifiers::SHIFT
 }
 
+fn default_scrollback_pager() -> Vec<String> {
+    // Start at the end, keep colors, and don't wrap long lines.
+    vec!["less".into(), "+G".into(), "-R".into(), "-S".into()]
+}
+
+fn default_notify_on_command_finish_after_secs() -> f64 {
+    10.0
+}
+
+fn default_bell_on_tab() -> String {
+    "🔔 ".to_string()
+}
+
 fn default_colr_rasterizer() -> FontRasterizerSelection {
     FontRasterizerSelection::Harfbuzz
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use termwiz::hyperlink::Rule;
+
+    /// The default frame rate cap allows 120Hz on ProMotion displays.
+    #[test]
+    fn max_fps_defaults_to_120() {
+        assert_eq!(default_max_fps(), 120);
+    }
+
+    /// The default rules as upstream wezterm has them.
+    fn upstream_rules() -> Vec<Rule> {
+        vec![
+            Rule::with_highlight(r"\((\w+://\S+)\)", "$1", 1).unwrap(),
+            Rule::with_highlight(r"\[(\w+://\S+)\]", "$1", 1).unwrap(),
+            Rule::with_highlight(r"<(\w+://\S+)>", "$1", 1).unwrap(),
+            Rule::new(hyperlink::CLOSING_PARENTHESIS_HYPERLINK_PATTERN, "$0").unwrap(),
+            Rule::new(hyperlink::GENERIC_HYPERLINK_PATTERN, "$0").unwrap(),
+            Rule::new(r"\b\w+@[\w-]+(\.[\w-]+)+\b", "mailto:$0").unwrap(),
+        ]
+    }
+
+    fn assert_same(line: &str, ours: &[Rule], upstream: &[Rule]) {
+        assert_eq!(
+            Rule::match_hyperlinks(line, ours),
+            Rule::match_hyperlinks(line, upstream),
+            "{line:?}"
+        );
+    }
+
+    // The rewritten rules (no \b, no lookahead, so the regex crate runs
+    // them) must find the same links, at the same places, as upstream's.
+    #[test]
+    fn default_rules_match_upstream_rules() {
+        let ours = default_hyperlink_rules();
+        let upstream = upstream_rules();
+
+        let lines = [
+            "   http://example.com)",
+            "http://example.com/(complete_parentheses)",
+            "http://example.com/(complete_parentheses)>",
+            "http://example.com/(complete_parentheses))",
+            "http://example.com/(complete_parentheses)-((-)-()-_-",
+            "see https://en.wikipedia.org/wiki/Rust_(programming_language) for more",
+            "see https://en.wikipedia.org/wiki/Rust_(programming_language).",
+            "(https://example.com/a_(b)) and [http://x.y/(z)] <ftp://h/(p)q>",
+            "https://a.b/(c) https://d.e/(f)",
+            "https://a.b/(c)é https://a.b/(c)_ xhttps://a.b/(c)",
+            "mail foo@example.com, bar@a-b.c-d- or baz@x.y.-z and q@w.e-",
+            "é@ü.ö a@b.c@d.e foo_bar@baz.qux. me@host",
+            "no links on this line at all, just words (and parens)",
+            "",
+        ];
+        for line in lines {
+            assert_same(line, &ours, &upstream);
+        }
+
+        // Random lines from characters that matter to these patterns.
+        let alphabet: Vec<char> = "ab_-1:/:/()()@@..  é<>[]".chars().collect();
+        let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for _ in 0..200_000 {
+            let len = (next() % 24) as usize;
+            let mut line: String = (0..len)
+                .map(|_| alphabet[(next() % alphabet.len() as u64) as usize])
+                .collect();
+            // Make URL schemes common enough to exercise those rules.
+            if next() % 2 == 0 {
+                let at = (next() as usize % (line.chars().count() + 1)).min(line.chars().count());
+                let byte = line
+                    .char_indices()
+                    .nth(at)
+                    .map(|(i, _)| i)
+                    .unwrap_or(line.len());
+                line.insert_str(byte, "http://");
+            }
+            assert_same(&line, &ours, &upstream);
+        }
+    }
 }

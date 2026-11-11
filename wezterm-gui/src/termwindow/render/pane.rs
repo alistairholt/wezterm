@@ -1,4 +1,4 @@
-use crate::quad::{HeapQuadAllocator, QuadTrait, TripleLayerQuadAllocator};
+use crate::quad::{QuadTrait, TripleLayerQuadAllocator};
 use crate::selection::SelectionRange;
 use crate::termwindow::box_model::*;
 use crate::termwindow::render::{
@@ -218,6 +218,59 @@ impl crate::TermWindow {
                 } else {
                     Some(config.inactive_pane_hsb)
                 });
+            }
+        }
+
+        // Like iTerm2's cursor guide: a bar behind the cursor's row. It is
+        // drawn after the pane background and before the lines, so text
+        // and cells with their own background color sit on top of it.
+        if let Some(color) = &config.cursor_guide_color {
+            let viewport_top = current_viewport.unwrap_or(dims.physical_top);
+            let row = cursor.y - viewport_top;
+            if pos.is_active
+                && cursor.visibility == termwiz::surface::CursorVisibility::Visible
+                && row >= 0
+                && (row as usize) < pos.height
+            {
+                let rect = euclid::rect(
+                    background_rect.origin.x,
+                    top_pixel_y + (pos.top as f32 + row as f32) * cell_height,
+                    background_rect.size.width,
+                    cell_height,
+                );
+                self.filled_rectangle(layers, 0, rect, color.to_linear())
+                    .context("filled_rectangle")?;
+            }
+        }
+
+        // FindCursor, like iTerm2's "Find Cursor": a crosshair through
+        // the cursor's row and column that fades out. Like the cursor
+        // guide it sits behind the text.
+        if pos.is_active {
+            if let Some(intensity) = self.find_cursor_intensity(pane_id) {
+                let viewport_top = current_viewport.unwrap_or(dims.physical_top);
+                let row = cursor.y - viewport_top;
+                if row >= 0 && (row as usize) < pos.height && cursor.x < pos.width {
+                    let color = palette.cursor_bg.to_linear().mul_alpha(0.6 * intensity);
+                    let row_rect = euclid::rect(
+                        background_rect.origin.x,
+                        top_pixel_y + (pos.top as f32 + row as f32) * cell_height,
+                        background_rect.size.width,
+                        cell_height,
+                    );
+                    self.filled_rectangle(layers, 0, row_rect, color)
+                        .context("filled_rectangle")?;
+                    let column_rect = euclid::rect(
+                        padding_left
+                            + border.left.get() as f32
+                            + (pos.left + cursor.x) as f32 * cell_width,
+                        background_rect.origin.y,
+                        cell_width,
+                        background_rect.size.height,
+                    );
+                    self.filled_rectangle(layers, 0, column_rect, color)
+                        .context("filled_rectangle")?;
+                }
             }
         }
 
@@ -467,7 +520,8 @@ impl crate::TermWindow {
                         }
                     }
 
-                    let mut buf = HeapQuadAllocator::default();
+                    let mut buf = self.term_window.line_quad_scratch.take();
+                    buf.clear();
                     let next_due = self.term_window.has_animation.borrow_mut().take();
 
                     let shape_key = LineToEleShapeCacheKey {
@@ -534,8 +588,11 @@ impl crate::TermWindow {
                     buf.apply_to(self.layers)
                         .context("HeapQuadAllocator::apply_to")?;
 
+                    let layers = buf.to_compact();
+                    self.term_window.line_quad_scratch.replace(buf);
+
                     let quad_value = LineQuadCacheValue {
-                        layers: buf,
+                        layers,
                         expires,
                         invalidate_on_hover_change: render_result.invalidate_on_hover_change,
                         current_highlight: if render_result.invalidate_on_hover_change {

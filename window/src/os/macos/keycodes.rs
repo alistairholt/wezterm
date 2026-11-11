@@ -133,6 +133,10 @@ pub fn vkey_to_phys(vkey: u16) -> Option<PhysKeyCode> {
     MAP.get(&vkey).copied()
 }
 
+pub fn phys_to_vkey(phys: PhysKeyCode) -> Option<u16> {
+    MAP.iter().find(|(_, p)| **p == phys).map(|(vkey, _)| *vkey)
+}
+
 pub const kVK_ANSI_A: u16 = 0x00;
 pub const kVK_ANSI_S: u16 = 0x01;
 pub const kVK_ANSI_D: u16 = 0x02;

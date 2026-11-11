@@ -485,7 +485,9 @@ impl ClientDomain {
         if let Some(inner) = self.inner() {
             if let Some(local_window_id) = inner.remote_to_local_window(remote_window_id) {
                 if let Some(mut window) = Mux::get().get_window_mut(local_window_id) {
-                    window.set_title(&title);
+                    // The server doesn't say whether the title was set
+                    // explicitly, so treat it like a pane title.
+                    window.set_title_from_pane(&title);
                 }
             }
         }

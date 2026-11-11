@@ -125,7 +125,7 @@ impl LineEditorHost for LuaReplHost {
 pub fn show_debug_overlay(
     mut term: TermWizTerminal,
     gui_win: GuiWin,
-    opengl_info: String,
+    renderer_info: String,
     connection_info: String,
 ) -> anyhow::Result<()> {
     term.no_grab_mouse_in_raw_mode();
@@ -195,7 +195,7 @@ pub fn show_debug_overlay(
          wezterm version: {version} {triple}\r\n\
          Window Environment: {connection_info}\r\n\
          Lua Version: {lua_version}\r\n\
-         {opengl_info}\r\n\
+         {renderer_info}\r\n\
          Enter lua statements or expressions and hit Enter.\r\n\
          Press ESC or CTRL-D to exit\r\n",
     ))])?;

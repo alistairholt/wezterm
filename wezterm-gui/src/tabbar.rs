@@ -241,6 +241,20 @@ fn compute_tab_title(
                     title = format!("{}{classic_spacing}", title);
                 }
 
+                if tab.broadcast_input {
+                    let marker = "📢 ";
+                    len += unicode_column_width(marker, None);
+                    items.push(FormatItem::Text(marker.to_string()));
+                }
+
+                if tab.has_unseen_bell && !config.bell_on_tab.is_empty() {
+                    len += unicode_column_width(&config.bell_on_tab, None);
+                    items.push(FormatItem::Text(config.bell_on_tab.clone()));
+                } else if tab.has_unseen_output && !config.tab_activity_symbol.is_empty() {
+                    len += unicode_column_width(&config.tab_activity_symbol, None);
+                    items.push(FormatItem::Text(config.tab_activity_symbol.clone()));
+                }
+
                 match pane.progress {
                     Progress::None => {}
                     Progress::Percentage(pct) | Progress::Error(pct) => {

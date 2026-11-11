@@ -555,6 +555,9 @@ impl CommandDef {
                     item.set_key_equiv_modifier_mask(equiv_mods);
                 }
 
+                if cmd.action == KeyAssignment::ToggleSecureKeyboardEntry {
+                    item.set_state(window::os::macos::secure_input::secure_keyboard_entry());
+                }
                 item.set_represented_item(represented_item);
                 item.set_tool_tip(&cmd.doc);
                 // Update the tag to indicate that this item should
@@ -568,6 +571,37 @@ impl CommandDef {
             if item.get_tag() == 0 {
                 item.get_menu().map(|menu| menu.remove_item(&item));
             }
+        }
+    }
+
+    /// Show whether Secure Keyboard Entry is on with a checkmark on its
+    /// menu item.
+    pub fn update_secure_keyboard_entry_menu_state() {
+        use window::os::macos::menu::*;
+        let Some(main_menu) = Menu::get_main_menu() else {
+            return;
+        };
+        let Some(app_item) = main_menu.item_with_title("WezTerm") else {
+            return;
+        };
+        let Some(app_menu) = app_item.get_sub_menu() else {
+            return;
+        };
+        let represented = RepresentedItem::KeyAssignment(KeyAssignment::ToggleSecureKeyboardEntry);
+        if let Some(item) = app_menu.get_item_with_represented_item(&represented) {
+            item.set_state(window::os::macos::secure_input::secure_keyboard_entry());
+        }
+    }
+
+    /// Apply `macos_secure_keyboard_entry` when it changes, so that a
+    /// config reload doesn't undo a toggle made from the menu.
+    pub fn apply_secure_keyboard_entry_config(config: &ConfigHandle) {
+        thread_local! {
+            static LAST: std::cell::Cell<Option<bool>> = std::cell::Cell::new(None);
+        }
+        let wanted = config.macos_secure_keyboard_entry;
+        if LAST.with(|last| last.replace(Some(wanted))) != Some(wanted) {
+            window::os::macos::secure_input::set_secure_keyboard_entry(wanted);
         }
     }
 }
@@ -669,6 +703,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Edit"],
             icon: Some("md_content_paste"),
         },
+        SelectAll => CommandDef {
+            brief: "Select All".into(),
+            doc: "Selects everything in the scrollback and on screen".into(),
+            keys: vec![(Modifiers::SUPER, "a".into())],
+            args: &[ArgType::ActivePane],
+            menubar: &["Edit"],
+            icon: Some("md_select_all"),
+        },
         ToggleFullScreen => CommandDef {
             brief: "Toggle full screen mode".into(),
             doc: "Switch between normal and full screen mode".into(),
@@ -676,6 +718,50 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             args: &[ArgType::ActiveWindow],
             menubar: &["View"],
             icon: Some("md_fullscreen"),
+        },
+        ToggleMaximize => CommandDef {
+            brief: "Zoom".into(),
+            doc: "Switches the window between filling the screen and its \
+                  previous size, like the Zoom button"
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["Window"],
+            icon: Some("md_window_maximize"),
+        },
+        MoveTabToNewWindow => CommandDef {
+            brief: "Move Tab to New Window".into(),
+            doc: "Moves the active tab out into a window of its own".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["Window"],
+            icon: Some("cod_multiple_windows"),
+        },
+        MovePaneToNewTab => CommandDef {
+            brief: "Move Pane to New Tab".into(),
+            doc: "Moves the active pane out into a tab of its own in this window".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Window"],
+            icon: Some("cod_split_horizontal"),
+        },
+        MovePaneToNewWindow => CommandDef {
+            brief: "Move Pane to New Window".into(),
+            doc: "Moves the active pane out into a window of its own".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Window"],
+            icon: Some("cod_multiple_windows"),
+        },
+        MergeAllWindows => CommandDef {
+            brief: "Merge All Windows".into(),
+            doc: "Moves the tabs of every other window in this workspace \
+                  into this window"
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["Window"],
+            icon: Some("cod_window"),
         },
         ToggleAlwaysOnTop => CommandDef {
             brief: "Toggle always on Top".into(),
@@ -744,6 +830,38 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["WezTerm"],
             icon: None,
         },
+        CopyOrInterrupt => CommandDef {
+            brief: "Copy or interrupt".into(),
+            doc: "Copies the selection to the clipboard if there is one; \
+              otherwise sends Ctrl-C to the pane."
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &[],
+            icon: Some("md_content_copy"),
+        },
+        ToggleAppVisibility => CommandDef {
+            brief: "Show or Hide WezTerm".into(),
+            doc: "Hides WezTerm when it is the active app; otherwise brings \
+              it to the front, opening a window if there is none. This is \
+              what macos_global_hotkey does."
+                .into(),
+            keys: vec![],
+            args: &[],
+            menubar: &[],
+            icon: None,
+        },
+        ToggleSecureKeyboardEntry => CommandDef {
+            brief: "Secure Keyboard Entry".into(),
+            doc: "Toggles Secure Keyboard Entry, which stops other apps \
+              from reading what you type while WezTerm is active. \
+              This is macOS specific."
+                .into(),
+            keys: vec![],
+            args: &[],
+            menubar: &["WezTerm"],
+            icon: Some("md_shield_lock"),
+        },
         SpawnWindow => CommandDef {
             brief: "New Window".into(),
             doc: "Launches the default program into a new window".into(),
@@ -751,6 +869,109 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             args: &[],
             menubar: &["Shell"],
             icon: Some("cod_empty_window"),
+        },
+        ToggleBroadcastInput => CommandDef {
+            brief: "Broadcast input to all panes in tab".into(),
+            doc: "Toggles sending what you type in the active pane to \
+              every pane in the current tab as well."
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Shell"],
+            icon: Some("md_broadcast"),
+        },
+        ToggleTabBar => CommandDef {
+            brief: "Show or Hide Tab Bar".into(),
+            doc: "Shows the tab bar if it is hidden, and hides it if it is shown".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["View"],
+            icon: Some("md_tab"),
+        },
+        ToggleWindowOpacity => CommandDef {
+            brief: "Toggle window transparency".into(),
+            doc: "Makes a translucent window opaque, or back again. \
+              Uses window_background_opacity."
+                .into(),
+            keys: vec![],
+            args: &[],
+            menubar: &["View"],
+            icon: Some("md_opacity"),
+        },
+        SaveScrollbackToFile => CommandDef {
+            brief: "Save contents...".into(),
+            doc: "Saves the current pane's scrollback and screen as \
+              plain text to a file you choose."
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Shell"],
+            icon: Some("md_content_save"),
+        },
+        ShowScrollbackInPager => CommandDef {
+            brief: "Show scrollback in pager".into(),
+            doc: "Opens the current pane's scrollback and screen, with \
+              colors, in a pager in a new tab. The pager is set by \
+              scrollback_pager."
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Edit"],
+            icon: Some("md_text_search"),
+        },
+        NotifyWhenCommandFinishes => CommandDef {
+            brief: "Notify when command finishes".into(),
+            doc: "Shows a notification once, when the command running in \
+              the current pane finishes, or the next one if none is \
+              running. Run it again to cancel. Needs shell integration."
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Shell"],
+            icon: Some("md_bell_ring"),
+        },
+        CopyLastCommandOutput => CommandDef {
+            brief: "Copy output of last command".into(),
+            doc: "Copies the output of the last command that printed \
+              something in the current pane to the clipboard. Needs \
+              shell integration."
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Edit"],
+            icon: Some("md_content_copy"),
+        },
+        FindCursor => CommandDef {
+            brief: "Find Cursor".into(),
+            doc: "Briefly draws a crosshair through the cursor so you can \
+              spot it, scrolling to the bottom first if needed."
+                .into(),
+            keys: vec![(Modifiers::SUPER, "/".into())],
+            args: &[ArgType::ActivePane],
+            menubar: &["View"],
+            icon: Some("md_crosshairs_gps"),
+        },
+        SelectLastCommandOutput => CommandDef {
+            brief: "Select output of last command".into(),
+            doc: "Selects the output of the last command that printed \
+              something in the current pane, scrolling to it if needed. \
+              Needs shell integration."
+                .into(),
+            keys: vec![(Modifiers::SUPER.union(Modifiers::SHIFT), "a".into())],
+            args: &[ArgType::ActivePane],
+            menubar: &["Edit"],
+            icon: Some("md_select"),
+        },
+        ShowLastCommandOutputInPager => CommandDef {
+            brief: "Show last command output in pager".into(),
+            doc: "Opens the output of the last command that printed \
+              something in the current pane, with colors, in a pager in \
+              a new tab. Needs shell integration."
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Edit"],
+            icon: Some("md_text_search"),
         },
         ClearScrollback(ScrollbackEraseMode::ScrollbackOnly) => CommandDef {
             brief: "Clear scrollback".into(),
@@ -998,6 +1219,23 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Window", "Select Tab"],
             icon: None,
         },
+        MovePaneToTab(n) => {
+            let n = *n;
+            let which = if n < 0 {
+                "right-most".to_string()
+            } else {
+                english_ordinal(n + 1)
+            };
+            CommandDef {
+                brief: format!("Move Pane to {which} Tab").into(),
+                doc: format!("Moves the active pane into the {which} tab, beside its active pane")
+                    .into(),
+                keys: vec![],
+                args: &[ArgType::ActivePane],
+                menubar: &[],
+                icon: Some("cod_split_horizontal"),
+            }
+        }
         ActivateTab(n) => {
             let n = *n;
             let ordinal = english_ordinal(n + 1);
@@ -1078,6 +1316,60 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             args: &[ArgType::ActiveTab],
             menubar: &[],
             icon: Some("md_close_box_outline"),
+        },
+        RenameTab => CommandDef {
+            brief: "Rename Tab...".into(),
+            doc: "Asks for a new title for the current tab".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveTab],
+            menubar: &["Shell"],
+            icon: Some("md_rename_box"),
+        },
+        UndoCloseTab => CommandDef {
+            brief: "Undo Close Tab".into(),
+            doc: "Brings back the most recently closed tab, if it was \
+              closed less than undo_close_tab_seconds ago."
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["Shell"],
+            icon: Some("md_tab_plus"),
+        },
+        CloseOtherTabs { confirm: true } => CommandDef {
+            brief: "Close Other Tabs".into(),
+            doc: "Closes every tab in this window except the current one, \
+                  asking first if any of them are running a program"
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActiveTab],
+            menubar: &["Shell"],
+            icon: Some("md_close_box_multiple_outline"),
+        },
+        CloseOtherTabs { confirm: false } => CommandDef {
+            brief: "Close Other Tabs".into(),
+            doc: "Closes every tab in this window except the current one".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveTab],
+            menubar: &[],
+            icon: Some("md_close_box_multiple_outline"),
+        },
+        CloseOtherPanes { confirm: true } => CommandDef {
+            brief: "Close Other Panes".into(),
+            doc: "Closes every pane in this tab except the current one, \
+                  asking first if any of them are running a program"
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Shell"],
+            icon: Some("md_close_box_multiple_outline"),
+        },
+        CloseOtherPanes { confirm: false } => CommandDef {
+            brief: "Close Other Panes".into(),
+            doc: "Closes every pane in this tab except the current one".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &[],
+            icon: Some("md_close_box_multiple_outline"),
         },
         CloseCurrentPane { confirm: true } => CommandDef {
             brief: "Close current Pane".into(),
@@ -1499,6 +1791,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             args: &[ArgType::ActivePane],
             menubar: &[],
             icon: Some("cod_split_vertical"),
+        },
+        BalancePanes => CommandDef {
+            brief: "Arrange Panes Evenly".into(),
+            doc: "Gives the panes in each row and column of this tab the same space".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Window", "Resize Pane"],
+            icon: Some("md_view_grid_outline"),
         },
         AdjustPaneSize(PaneDirection::Left, amount) => CommandDef {
             brief: format!("Resize Pane {amount} cell(s) to the Left").into(),
@@ -2017,11 +2317,16 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
     return vec![
         // ----------------- WezTerm
         ReloadConfiguration,
+        ToggleSecureKeyboardEntry,
         HideApplication,
+        ToggleAppVisibility,
         QuitApplication,
         // ----------------- Shell
         SpawnTab(SpawnTabDomain::CurrentPaneDomain),
         SpawnWindow,
+        ToggleBroadcastInput,
+        NotifyWhenCommandFinishes,
+        SaveScrollbackToFile,
         SplitVertical(SpawnCommand {
             domain: SpawnTabDomain::CurrentPaneDomain,
             ..Default::default()
@@ -2031,14 +2336,24 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
             ..Default::default()
         }),
         CloseCurrentTab { confirm: true },
+        CloseOtherTabs { confirm: true },
+        UndoCloseTab,
+        RenameTab,
         CloseCurrentPane { confirm: true },
+        CloseOtherPanes { confirm: true },
         DetachDomain(SpawnTabDomain::CurrentPaneDomain),
         ResetTerminal,
         // ----------------- Edit
         CopyTo(ClipboardCopyDestination::Clipboard),
         PasteFrom(ClipboardPasteSource::Clipboard),
+        SelectAll,
         ClearScrollback(ScrollbackEraseMode::ScrollbackOnly),
         ClearScrollback(ScrollbackEraseMode::ScrollbackAndViewport),
+        ShowScrollbackInPager,
+        ShowLastCommandOutputInPager,
+        CopyLastCommandOutput,
+        SelectLastCommandOutput,
+        FindCursor,
         QuickSelect,
         CharSelect(CharSelectArguments::default()),
         ActivateCopyMode,
@@ -2049,12 +2364,19 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         IncreaseFontSize,
         ResetFontSize,
         ResetFontAndWindowSize,
+        ToggleWindowOpacity,
+        ToggleTabBar,
         ScrollByPage(NotNan::new(-1.0).unwrap()),
         ScrollByPage(NotNan::new(1.0).unwrap()),
         ScrollToTop,
         ScrollToBottom,
         // ----------------- Window
         ToggleFullScreen,
+        ToggleMaximize,
+        MoveTabToNewWindow,
+        MovePaneToNewTab,
+        MovePaneToNewWindow,
+        MergeAllWindows,
         ToggleAlwaysOnTop,
         ToggleAlwaysOnBottom,
         SetWindowLevel(WindowLevel::AlwaysOnBottom),
@@ -2114,6 +2436,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ActivateWindowRelative(1),
         MoveTabRelative(-1),
         MoveTabRelative(1),
+        BalancePanes,
         AdjustPaneSize(PaneDirection::Left, 1),
         AdjustPaneSize(PaneDirection::Right, 1),
         AdjustPaneSize(PaneDirection::Up, 1),

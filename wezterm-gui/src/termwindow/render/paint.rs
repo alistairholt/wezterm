@@ -1,4 +1,4 @@
-use crate::termwindow::{RenderFrame, TermWindowNotif};
+use crate::termwindow::TermWindowNotif;
 use ::window::bitmaps::atlas::OutOfTextureSpace;
 use ::window::WindowOps;
 use anyhow::Context;
@@ -14,7 +14,7 @@ pub enum AllowImage {
 }
 
 impl crate::TermWindow {
-    pub fn paint_impl(&mut self, frame: &mut RenderFrame) {
+    pub fn paint_impl(&mut self) {
         self.num_frames += 1;
         // If nothing on screen needs animating, then we can avoid
         // invalidating as frequently
@@ -105,7 +105,7 @@ impl crate::TermWindow {
         }
         log::debug!("paint_impl before call_draw elapsed={:?}", start.elapsed());
 
-        self.call_draw(frame).ok();
+        self.call_draw().ok();
         self.last_frame_duration = start.elapsed();
         log::debug!(
             "paint_impl elapsed={:?}, fps={}",

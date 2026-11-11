@@ -241,6 +241,11 @@ pub trait Pane: Downcast + Send + Sync {
         Progress::None
     }
     fn send_paste(&self, text: &str) -> anyhow::Result<()>;
+    /// Whether the program in the pane has turned on bracketed paste.
+    /// Panes that can't tell say true, so callers don't warn for them.
+    fn bracketed_paste_enabled(&self) -> bool {
+        true
+    }
     fn send_composed_text(&self, text: &str) -> anyhow::Result<()> {
         self.writer().write_all(text.as_bytes())?;
         Ok(())

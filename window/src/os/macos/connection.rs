@@ -24,7 +24,6 @@ pub struct Connection {
     ns_app: id,
     pub(crate) windows: RefCell<HashMap<usize, Rc<RefCell<WindowInner>>>>,
     pub(crate) next_window_id: AtomicUsize,
-    pub(crate) gl_connection: RefCell<Option<Rc<crate::egl::GlConnection>>>,
 }
 
 impl Connection {
@@ -34,6 +33,17 @@ impl Connection {
         SPAWN_QUEUE.run();
 
         unsafe {
+            // AppKit treats command line arguments it doesn't know as files
+            // to open, so `wezterm-gui start` would deliver openFile("start")
+            // and run "start" as a script. Files opened from Finder or
+            // `open` arrive as Apple Events, which this doesn't affect.
+            let defaults: id = msg_send![class!(NSUserDefaults), standardUserDefaults];
+            let key = super::nsstring("NSTreatUnknownArgumentsAsOpen");
+            let no = super::nsstring("NO");
+            let registered: id =
+                msg_send![class!(NSDictionary), dictionaryWithObject: *no forKey: *key];
+            let () = msg_send![defaults, registerDefaults: registered];
+
             let ns_app = NSApp();
             ns_app.setActivationPolicy_(NSApplicationActivationPolicyRegular);
 
@@ -44,7 +54,6 @@ impl Connection {
                 ns_app,
                 windows: RefCell::new(HashMap::new()),
                 next_window_id: AtomicUsize::new(1),
-                gl_connection: RefCell::new(None),
             };
             Ok(conn)
         }

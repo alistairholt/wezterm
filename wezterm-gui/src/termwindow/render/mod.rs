@@ -41,6 +41,7 @@ pub mod fancy_tab_bar;
 pub mod paint;
 pub mod pane;
 pub mod screen_line;
+mod shape_hash;
 pub mod split;
 pub mod tab_bar;
 pub mod window_buttons;
@@ -226,6 +227,30 @@ impl crate::TermWindow {
     pub fn update_next_frame_time(&self, next_due: Option<Instant>) {
         if next_due.is_some() {
             update_next_frame_time(&mut *self.has_animation.borrow_mut(), next_due);
+        }
+    }
+
+    /// How strongly to draw the FindCursor crosshair in this pane, or
+    /// None once it has faded out.
+    fn find_cursor_intensity(&self, pane_id: PaneId) -> Option<f32> {
+        let mut per_pane = self.pane_state(pane_id);
+        let start = per_pane.find_cursor_start?;
+        let mut ease = ColorEase::new(
+            150,
+            config::EasingFunction::EaseOut,
+            1000,
+            config::EasingFunction::EaseIn,
+            Some(start),
+        );
+        match ease.intensity_one_shot() {
+            Some((intensity, next)) => {
+                self.update_next_frame_time(Some(next));
+                Some(intensity)
+            }
+            None => {
+                per_pane.find_cursor_start.take();
+                None
+            }
         }
     }
 
@@ -806,7 +831,6 @@ impl crate::TermWindow {
         font: Option<&Rc<LoadedFont>>,
         metrics: &RenderMetrics,
     ) -> anyhow::Result<Rc<Vec<ShapedInfo>>> {
-        let shape_resolve_start = Instant::now();
         let key = BorrowedShapeCacheKey {
             style,
             text: &cluster.text,
@@ -815,6 +839,11 @@ impl crate::TermWindow {
             Some(Ok(info)) => info,
             Some(Err(err)) => return Err(err),
             None => {
+                // Only misses are timed: a hit takes about 100ns, and
+                // reading the clock twice and recording the result for
+                // every cluster drawn cost more than the lookup itself.
+                // Hits are counted by shape_cache.hit.rate.
+                let shape_resolve_start = Instant::now();
                 let font = match font {
                     Some(f) => Rc::clone(f),
                     None => self.fonts.resolve_font(style)?,
@@ -845,6 +874,13 @@ impl crate::TermWindow {
                         self.shape_cache
                             .borrow_mut()
                             .put(key.to_owned(), Ok(Rc::clone(&shaped)));
+                        crate::stats::cached_histogram!("cached_cluster_shape")
+                            .record(shape_resolve_start.elapsed());
+                        log::trace!(
+                            "shape_resolve for cluster len {} -> elapsed {:?}",
+                            cluster.text.len(),
+                            shape_resolve_start.elapsed()
+                        );
                         shaped
                     }
                     Err(err) => {
@@ -859,12 +895,6 @@ impl crate::TermWindow {
                 }
             }
         };
-        metrics::histogram!("cached_cluster_shape").record(shape_resolve_start.elapsed());
-        log::trace!(
-            "shape_resolve for cluster len {} -> elapsed {:?}",
-            cluster.text.len(),
-            shape_resolve_start.elapsed()
-        );
         Ok(glyph_info)
     }
 
@@ -909,7 +939,7 @@ impl crate::TermWindow {
             id
         });
 
-        let shape_hash = line.compute_shape_hash();
+        let shape_hash = shape_hash::line_shape_hash(line);
 
         let state = Arc::new(CachedLineState {
             id,

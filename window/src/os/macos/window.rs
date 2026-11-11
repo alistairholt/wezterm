@@ -9,29 +9,28 @@ use crate::os::macos::menu::{MenuItem, RepresentedItem};
 use crate::parameters::{Border, Parameters, TitleBar};
 use crate::{
     Clipboard, Connection, CursorIcon, DeadKeyStatus, Dimensions, Handled, KeyCode, KeyEvent,
-    Modifiers, MouseButtons, MouseEvent, MouseEventKind, MousePress, Point, RawKeyEvent, Rect,
-    RequestedWindowGeometry, ResizeIncrement, ResolvedGeometry, ScreenPoint, Size, ULength,
-    WindowDecorations, WindowEvent, WindowEventSender, WindowOps, WindowState,
+    Modifiers, MouseButtons, MouseEvent, MouseEventKind, MousePress, PhysKeyCode, Point,
+    RawKeyEvent, Rect, RequestedWindowGeometry, ResizeIncrement, ResolvedGeometry, ScreenPoint,
+    Size, ULength, WindowDecorations, WindowEvent, WindowEventSender, WindowOps, WindowState,
 };
-use anyhow::{anyhow, bail, ensure};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use cocoa::appkit::{
     self, CGFloat, NSApplication, NSApplicationActivateIgnoringOtherApps,
     NSApplicationPresentationOptions, NSBackingStoreBuffered, NSEvent, NSEventModifierFlags,
-    NSOpenGLContext, NSOpenGLPixelFormat, NSPasteboard, NSRunningApplication, NSScreen, NSView,
-    NSViewHeightSizable, NSViewWidthSizable, NSWindow, NSWindowStyleMask,
+    NSPasteboard, NSRunningApplication, NSScreen, NSView, NSViewHeightSizable, NSViewWidthSizable,
+    NSWindow, NSWindowStyleMask,
 };
 use cocoa::base::*;
 use cocoa::foundation::{
-    NSArray, NSAutoreleasePool, NSFastEnumeration, NSInteger, NSNotFound, NSPoint, NSRect, NSSize,
-    NSString, NSUInteger,
+    NSArray, NSFastEnumeration, NSInteger, NSNotFound, NSPoint, NSRect, NSSize, NSString,
+    NSUInteger,
 };
 use config::window::WindowLevel;
 use config::{ConfigHandle, RgbaColor, SrgbaTuple};
 use core_foundation::base::{CFTypeID, TCFType};
-use core_foundation::bundle::{CFBundleGetBundleWithIdentifier, CFBundleGetFunctionPointerForName};
 use core_foundation::data::{CFData, CFDataGetBytePtr, CFDataRef};
-use core_foundation::string::{CFString, CFStringRef, UniChar};
+use core_foundation::string::{CFStringRef, UniChar};
 use core_foundation::{declare_TCFType, impl_TCFType};
 use objc::declare::ClassDecl;
 use objc::rc::{StrongPtr, WeakPtr};
@@ -48,7 +47,6 @@ use std::ffi::{c_void, CStr};
 use std::path::PathBuf;
 use std::ptr::NonNull;
 use std::rc::Rc;
-use std::str::FromStr;
 use std::time::Instant;
 use wezterm_font::FontConfiguration;
 use wezterm_input_types::{is_ascii_control, IntegratedTitleButtonStyle, KeyboardLedStatus};
@@ -62,7 +60,13 @@ const NSViewLayerContentsRedrawDuringViewResize: NSInteger = 2;
 unsafe fn window_background_color(is_opaque: bool) -> id {
     let clear_color = cocoa::appkit::NSColor::clearColor(nil);
     if is_opaque {
-        clear_color
+        // On macOS 27 the native titlebar draws over the window's
+        // background color, so a clear background left it transparent
+        // (white text area in dark mode) even for an opaque window. The
+        // Metal layer covers the content area, so this color only shows
+        // in the titlebar.
+        // <https://github.com/wezterm/wezterm/issues/8153>
+        msg_send![class!(NSColor), windowBackgroundColor]
     } else {
         // An alpha of zero puts NSWindow into a special mode for irregularly
         // shaped windows, where shadows are generated from the window contents.
@@ -144,246 +148,101 @@ unsafe impl objc::Encode for NSRangePointer {
     }
 }
 
+#[link(name = "Foundation", kind = "framework")]
+extern "C" {
+    static NSRunLoopCommonModes: id;
+}
+
+/// QuartzCore's `CAFrameRateRange`, passed to
+/// `-[CADisplayLink setPreferredFrameRateRange:]`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CAFrameRateRange {
+    minimum: f32,
+    maximum: f32,
+    preferred: f32,
+}
+
+unsafe impl objc::Encode for CAFrameRateRange {
+    fn encode() -> objc::Encoding {
+        unsafe { objc::Encoding::from_str("{CAFrameRateRange=fff}") }
+    }
+}
+
+/// The frame rate range for a window's display link: up to `max_fps`,
+/// which the system then limits to what the window's display can do.
+fn frame_rate_range(max_fps: u64) -> CAFrameRateRange {
+    let max = max_fps.clamp(1, 1000) as f32;
+    CAFrameRateRange {
+        minimum: max.min(30.),
+        maximum: max,
+        preferred: max,
+    }
+}
+
+/// With Ctrl+Shift held, macOS reports some keys with `characters` set
+/// to the unshifted character and `charactersIgnoringModifiers` set to
+/// the shifted one: Ctrl+Shift+, gives chars="," and unmod="<". The same
+/// goes for `.`, `/`, `=`, `` ` `` and the digits on a US layout. Taking
+/// `chars` would lose the shift, and because chars and unmod differ the
+/// key would then be sent with no modifiers at all, so a kitty keyboard
+/// app saw a bare ",". Returns true when the key should come from
+/// `unmod` with its modifiers kept.
+/// <https://github.com/wezterm/wezterm/issues/6994>
+/// <https://github.com/wezterm/wezterm/issues/1907>
+fn ctrl_shift_dropped_shift(modifiers: Modifiers, chars: &str, unmod: &str) -> bool {
+    if !modifiers.contains(Modifiers::CTRL | Modifiers::SHIFT)
+        || modifiers.intersects(Modifiers::ALT | Modifiers::SUPER)
+    {
+        return false;
+    }
+    let single = |s: &str| {
+        let mut iter = s.chars();
+        match (iter.next(), iter.next()) {
+            (Some(c), None) => Some(c),
+            _ => None,
+        }
+    };
+    match (single(chars), single(unmod)) {
+        (Some(c), Some(u)) => {
+            c != u && c.is_ascii_graphic() && u.is_ascii_punctuation() && !c.is_ascii_alphabetic()
+        }
+        _ => false,
+    }
+}
+
+/// For a flagsChanged event, the modifier key that went down or up and
+/// whether it is now down. `device_flags` are the event's modifierFlags,
+/// whose low bits say which side of each modifier is held (the
+/// NX_DEVICE*KEYMASK values from IOKit's IOLLEvent.h). Caps lock is left
+/// out: macOS sends one event per toggle, not a press and a release.
+fn modifier_key_transition(virtual_key: u16, device_flags: u64) -> Option<(PhysKeyCode, bool)> {
+    const LEFT_CONTROL: u64 = 0x0000_0001;
+    const LEFT_SHIFT: u64 = 0x0000_0002;
+    const RIGHT_SHIFT: u64 = 0x0000_0004;
+    const LEFT_COMMAND: u64 = 0x0000_0008;
+    const RIGHT_COMMAND: u64 = 0x0000_0010;
+    const LEFT_OPTION: u64 = 0x0000_0020;
+    const RIGHT_OPTION: u64 = 0x0000_0040;
+    const RIGHT_CONTROL: u64 = 0x0000_2000;
+
+    let (phys, mask) = match virtual_key {
+        kVK_Shift => (PhysKeyCode::LeftShift, LEFT_SHIFT),
+        kVK_RightShift => (PhysKeyCode::RightShift, RIGHT_SHIFT),
+        kVK_Control => (PhysKeyCode::LeftControl, LEFT_CONTROL),
+        kVK_RightControl => (PhysKeyCode::RightControl, RIGHT_CONTROL),
+        kVK_Option => (PhysKeyCode::LeftAlt, LEFT_OPTION),
+        kVK_RightOption => (PhysKeyCode::RightAlt, RIGHT_OPTION),
+        kVK_Command => (PhysKeyCode::LeftWindows, LEFT_COMMAND),
+        kVK_RightCommand => (PhysKeyCode::RightWindows, RIGHT_COMMAND),
+        _ => return None,
+    };
+    Some((phys, device_flags & mask != 0))
+}
+
 impl NSRange {
     fn new(location: u64, length: u64) -> Self {
         Self(cocoa::foundation::NSRange { location, length })
-    }
-}
-
-#[derive(Clone)]
-pub enum BackendImpl {
-    Cgl(Rc<cglbits::GlState>),
-    Egl(Rc<crate::egl::GlState>),
-}
-
-impl BackendImpl {
-    pub fn update(&self) {
-        if let Self::Cgl(be) = self {
-            be.update();
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct GlContextPair {
-    pub context: Rc<glium::backend::Context>,
-    pub backend: BackendImpl,
-}
-
-impl GlContextPair {
-    /// on macOS we first try to initialize EGL by dynamically loading it.
-    /// The system doesn't provide an EGL implementation, but the ANGLE
-    /// project (and MetalANGLE) both provide implementations.
-    /// The ANGLE EGL implementation wants a CALayer descendant passed
-    /// as the EGLNativeWindowType.
-    pub fn create(view: id) -> anyhow::Result<Self> {
-        let behavior = if cfg!(debug_assertions) {
-            glium::debug::DebugCallbackBehavior::DebugMessageOnError
-        } else {
-            glium::debug::DebugCallbackBehavior::Ignore
-        };
-
-        // Let's first try to initialize EGL...
-        let (context, backend) = match if config::configuration().prefer_egl {
-            // ANGLE wants a layer, so tell the view to create one.
-            // Importantly, we must set its scale to 1.0 prior to initializing
-            // EGL to prevent undesirable scaling.
-            let layer: id;
-            unsafe {
-                let _: () = msg_send![view, setWantsLayer: YES];
-                layer = msg_send![view, layer];
-                let _: () = msg_send![layer, setContentsScale: 1.0f64];
-                let _: () = msg_send![layer, setOpaque: NO];
-            };
-
-            let conn = Connection::get().unwrap();
-
-            let state = match conn.gl_connection.borrow().as_ref() {
-                None => crate::egl::GlState::create(None, layer as *const c_void),
-                Some(glconn) => crate::egl::GlState::create_with_existing_connection(
-                    glconn,
-                    layer as *const c_void,
-                ),
-            };
-
-            if state.is_ok() {
-                conn.gl_connection
-                    .borrow_mut()
-                    .replace(Rc::clone(state.as_ref().unwrap().get_connection()));
-
-                // ANGLE will create a CAMetalLayer as a sublayer of our provided
-                // layer.  Even though CALayer defaults to !opaque, CAMetalLayer
-                // defaults to opaque, so we need to find that layer and fix
-                // the opacity so that our alpha values are respected.
-                unsafe {
-                    let sublayers: id = msg_send![layer, sublayers];
-                    let layer_count = sublayers.count();
-                    for i in 0..layer_count {
-                        let layer = sublayers.objectAtIndex(i);
-                        let _: () = msg_send![layer, setOpaque: NO];
-                    }
-                }
-            }
-
-            state
-        } else {
-            Err(anyhow!("prefers not to use EGL"))
-        } {
-            Ok(backend) => {
-                let backend = Rc::new(backend);
-                let context =
-                    unsafe { glium::backend::Context::new(Rc::clone(&backend), true, behavior) }?;
-                (context, BackendImpl::Egl(backend))
-            }
-            // ... and then fallback to the deprecated platform provided CGL
-            Err(err) => {
-                log::debug!("EGL init failed: {:#}, falling back to CGL", err);
-                let backend = Rc::new(cglbits::GlState::create(view)?);
-                let context =
-                    unsafe { glium::backend::Context::new(Rc::clone(&backend), true, behavior) }?;
-                (context, BackendImpl::Cgl(backend))
-            }
-        };
-
-        Ok(Self { context, backend })
-    }
-}
-
-mod cglbits {
-    use super::*;
-
-    pub struct GlState {
-        _pixel_format: StrongPtr,
-        gl_context: StrongPtr,
-    }
-
-    impl GlState {
-        pub fn create(view: id) -> anyhow::Result<Self> {
-            log::trace!("Calling NSOpenGLPixelFormat::initWithAttributes");
-            let pixel_format = unsafe {
-                StrongPtr::new(NSOpenGLPixelFormat::alloc(nil).initWithAttributes_(&[
-                    appkit::NSOpenGLPFAOpenGLProfile as u32,
-                    appkit::NSOpenGLProfileVersion3_2Core as u32,
-                    appkit::NSOpenGLPFAClosestPolicy as u32,
-                    appkit::NSOpenGLPFAColorSize as u32,
-                    32,
-                    appkit::NSOpenGLPFAAlphaSize as u32,
-                    8,
-                    appkit::NSOpenGLPFADepthSize as u32,
-                    24,
-                    appkit::NSOpenGLPFAStencilSize as u32,
-                    8,
-                    appkit::NSOpenGLPFAAllowOfflineRenderers as u32,
-                    appkit::NSOpenGLPFAAccelerated as u32,
-                    appkit::NSOpenGLPFADoubleBuffer as u32,
-                    0,
-                ]))
-            };
-            log::trace!("NSOpenGLPixelFormat::initWithAttributes returned");
-            ensure!(
-                !pixel_format.is_null(),
-                "failed to create NSOpenGLPixelFormat"
-            );
-
-            // Allow using retina resolutions; without this we're forced into low res
-            // and the system will scale us up, resulting in blurry rendering
-            unsafe {
-                let _: () = msg_send![view, setWantsBestResolutionOpenGLSurface: YES];
-            }
-
-            let gl_context = unsafe {
-                StrongPtr::new(
-                    NSOpenGLContext::alloc(nil).initWithFormat_shareContext_(*pixel_format, nil),
-                )
-            };
-            ensure!(!gl_context.is_null(), "failed to create NSOpenGLContext");
-
-            unsafe {
-                let opaque: cgl::GLint = 0;
-                gl_context.setValues_forParameter_(
-                    &opaque,
-                    cocoa::appkit::NSOpenGLContextParameter::NSOpenGLCPSurfaceOpacity,
-                );
-
-                gl_context.setView_(view);
-
-                // Explicitly disable vsync; we'll manage throttling frames at
-                // the application level
-                let swap_interval: cgl::GLint = 0;
-                gl_context.setValues_forParameter_(
-                    &swap_interval,
-                    cocoa::appkit::NSOpenGLContextParameter::NSOpenGLCPSwapInterval,
-                );
-            }
-
-            Ok(Self {
-                _pixel_format: pixel_format,
-                gl_context,
-            })
-        }
-
-        /// Calls NSOpenGLContext update; we need to do this on resize
-        pub fn update(&self) {
-            unsafe {
-                let _: () = msg_send![*self.gl_context, update];
-            }
-        }
-    }
-
-    unsafe impl glium::backend::Backend for GlState {
-        fn resize(&self, _: (u32, u32)) {
-            todo!()
-        }
-
-        fn swap_buffers(&self) -> Result<(), glium::SwapBuffersError> {
-            unsafe {
-                let pool = NSAutoreleasePool::new(nil);
-                self.gl_context.flushBuffer();
-                let _: () = msg_send![pool, release];
-            }
-            Ok(())
-        }
-
-        unsafe fn get_proc_address(&self, symbol: &str) -> *const c_void {
-            let symbol_name: CFString = FromStr::from_str(symbol).unwrap();
-            let framework_name: CFString = FromStr::from_str("com.apple.opengl").unwrap();
-            let framework = CFBundleGetBundleWithIdentifier(framework_name.as_concrete_TypeRef());
-            let symbol =
-                CFBundleGetFunctionPointerForName(framework, symbol_name.as_concrete_TypeRef());
-            symbol as *const _
-        }
-
-        fn get_framebuffer_dimensions(&self) -> (u32, u32) {
-            unsafe {
-                let view = self.gl_context.view();
-                let frame = NSView::frame(view);
-                let backing_frame = NSView::convertRectToBacking(view, frame);
-                (
-                    backing_frame.size.width as u32,
-                    backing_frame.size.height as u32,
-                )
-            }
-        }
-
-        fn is_current(&self) -> bool {
-            unsafe {
-                let pool = NSAutoreleasePool::new(nil);
-                let current = NSOpenGLContext::currentContext(nil);
-                let res = if current != nil {
-                    let is_equal: BOOL = msg_send![current, isEqual: *self.gl_context];
-                    is_equal != NO
-                } else {
-                    false
-                };
-                let _: () = msg_send![pool, release];
-                res
-            }
-        }
-
-        unsafe fn make_current(&self) {
-            let _: () = msg_send![*self.gl_context, update];
-            self.gl_context.makeCurrentContext();
-        }
     }
 }
 
@@ -472,8 +331,11 @@ impl Window {
         } = conn.resolve_geometry(geometry);
 
         let scale_factor = (conn.default_dpi() / crate::DEFAULT_DPI) as usize;
-        let width = width / scale_factor;
-        let height = height / scale_factor;
+        // Divide the size as floats: on a 2x screen an odd pixel height
+        // (an odd row count with an odd cell height) is a half point, and
+        // integer division would round it down and lose a row.
+        let width = width as f64 / scale_factor as f64;
+        let height = height as f64 / scale_factor as f64;
         let x = x.map(|x| x / scale_factor as i32);
         let y = y.map(|y| y / scale_factor as i32);
 
@@ -487,10 +349,7 @@ impl Window {
                 config.window_decorations,
                 config.integrated_title_button_style,
             );
-            let rect = NSRect::new(
-                NSPoint::new(0., 0.),
-                NSSize::new(width as f64, height as f64),
-            );
+            let rect = NSRect::new(NSPoint::new(0., 0.), NSSize::new(width, height));
 
             let conn = Connection::get().expect("Connection::init has not been called");
 
@@ -503,9 +362,8 @@ impl Window {
                 window_id,
                 window: None,
                 screen_changed: false,
-                paint_throttled: false,
+                display_link: None,
                 invalidated: true,
-                gl_context_pair: None,
                 text_cursor_position: Rect::new(Point::new(0, 0), Size::new(0, 0)),
                 tracking_rect_tag: 0,
                 hscroll_remainder: 0.,
@@ -723,19 +581,6 @@ pub fn window_level_to_nswindow_level(level: WindowLevel) -> NSWindowLevel {
 
 #[async_trait(?Send)]
 impl WindowOps for Window {
-    async fn enable_opengl(&self) -> anyhow::Result<Rc<glium::backend::Context>> {
-        let window_id = self.id;
-        promise::spawn::spawn(async move {
-            if let Some(handle) = Connection::get().unwrap().window_by_id(window_id) {
-                let mut inner = handle.borrow_mut();
-                inner.enable_opengl()
-            } else {
-                bail!("invalid window");
-            }
-        })
-        .await
-    }
-
     fn notify<T: Any + Send + Sync>(&self, t: T)
     where
         Self: Sized,
@@ -764,6 +609,16 @@ impl WindowOps for Window {
             inner.focus();
             Ok(())
         });
+    }
+
+    fn request_attention(&self) {
+        // NSInformationalRequest bounces the Dock icon once. AppKit
+        // ignores the request while the app is active.
+        const NS_INFORMATIONAL_REQUEST: NSInteger = 10;
+        unsafe {
+            let _: NSInteger =
+                msg_send![cocoa::appkit::NSApp(), requestUserAttention: NS_INFORMATIONAL_REQUEST];
+        }
     }
 
     fn hide(&self) {
@@ -1032,14 +887,6 @@ fn cursor_icons_use_macos_cursors() {
 }
 
 impl WindowInner {
-    fn enable_opengl(&mut self) -> anyhow::Result<Rc<glium::backend::Context>> {
-        if let Some(window_view) = WindowView::get_this(unsafe { &**self.view }) {
-            window_view.inner.borrow_mut().enable_opengl()
-        } else {
-            anyhow::bail!("window invalid");
-        }
-    }
-
     fn is_fullscreen(&mut self) -> bool {
         if self.is_native_fullscreen() {
             true
@@ -1334,10 +1181,16 @@ impl WindowInner {
 
     fn invalidate(&mut self) {
         unsafe {
-            let () = msg_send![*self.view, setNeedsDisplay: YES];
             if let Some(window_view) = WindowView::get_this(&**self.view) {
-                window_view.inner.borrow_mut().invalidated = true;
+                let mut inner = window_view.inner.borrow_mut();
+                inner.invalidated = true;
+                if let Some(link) = &inner.display_link {
+                    // The next tick of the display link displays the view.
+                    let () = msg_send![**link, setPaused: NO];
+                    return;
+                }
             }
+            let () = msg_send![*self.view, setNeedsDisplay: YES];
         }
     }
     fn set_title(&mut self, title: &str) {
@@ -1449,6 +1302,12 @@ impl WindowInner {
             inner.config = config.clone();
             if dpi_changed {
                 inner.screen_changed = true;
+            }
+            if let Some(link) = &inner.display_link {
+                let range = frame_rate_range(config.max_fps);
+                unsafe {
+                    let () = msg_send![**link, setPreferredFrameRateRange: range];
+                }
             }
         }
         self.update_window_shadow();
@@ -1644,10 +1503,12 @@ struct Inner {
     view_id: Option<WeakPtr>,
     window: Option<WeakPtr>,
     screen_changed: bool,
-    paint_throttled: bool,
+    /// The view's CADisplayLink. It runs only while the window is
+    /// invalidated, and each tick asks AppKit to display the view, so
+    /// paints follow the display's refresh rate, capped by max_fps.
+    display_link: Option<StrongPtr>,
     window_id: usize,
     invalidated: bool,
-    gl_context_pair: Option<GlContextPair>,
     text_cursor_position: Rect,
     tracking_rect_tag: NSInteger,
     hscroll_remainder: f64,
@@ -1831,15 +1692,6 @@ impl Keyboard {
 }
 
 impl Inner {
-    fn enable_opengl(&mut self) -> anyhow::Result<Rc<glium::backend::Context>> {
-        let view = self.view_id.as_ref().unwrap().load();
-        let glium_context = GlContextPair::create(*view)?;
-
-        self.gl_context_pair.replace(glium_context.clone());
-
-        Ok(glium_context.context)
-    }
-
     /// <https://stackoverflow.com/a/22677690>
     /// <https://stackoverflow.com/a/12548163>
     /// <https://stackoverflow.com/a/8263841>
@@ -2411,6 +2263,13 @@ impl WindowView {
 
     extern "C" fn window_will_close(this: &mut Object, _sel: Sel, _id: id) {
         if let Some(this) = Self::get_this(this) {
+            // The display link retains the view as its target, and the run
+            // loop retains the link; invalidate it to break that cycle.
+            if let Some(link) = this.inner.borrow_mut().display_link.take() {
+                unsafe {
+                    let () = msg_send![*link, invalidate];
+                }
+            }
             // Advise the window of its impending death
             this.inner
                 .borrow_mut()
@@ -2850,10 +2709,7 @@ impl WindowView {
         // <https://github.com/wezterm/wezterm/issues/760>
         let swap_unmod_and_chars = (modifiers.contains(Modifiers::SHIFT | Modifiers::ALT)
             && virtual_key == kVK_ANSI_Grave)
-            ||
-            // <https://github.com/wezterm/wezterm/issues/1907>
-            (modifiers.contains(Modifiers::SHIFT | Modifiers::CTRL)
-                && virtual_key == kVK_ANSI_Slash);
+            || ctrl_shift_dropped_shift(modifiers, chars, unmod);
 
         if let Some(key) = key_string_to_key_code(chars).or_else(|| key_string_to_key_code(unmod)) {
             let (key, raw_key) = if prefer_vkey {
@@ -2982,6 +2838,50 @@ impl WindowView {
                 .events
                 .dispatch(WindowEvent::AdviseModifiersLedStatus(modifiers, leds));
         }
+
+        // Pressing or releasing a modifier key on its own only arrives
+        // here, never as keyDown/keyUp. Turn it into key events so that
+        // apps using the kitty keyboard protocol's "report all keys as
+        // escape codes" can see it.
+        // <https://github.com/wezterm/wezterm/issues/5147>
+        let virtual_key = unsafe { nsevent.keyCode() };
+        let Some((phys, key_is_down)) =
+            modifier_key_transition(virtual_key, modifier_flags.bits() as u64)
+        else {
+            return;
+        };
+        let raw_key_handled = Handled::new();
+        let raw_key_event = RawKeyEvent {
+            key: phys.to_key_code(),
+            phys_code: Some(phys),
+            raw_code: virtual_key as _,
+            leds,
+            modifiers,
+            repeat_count: 1,
+            key_is_down,
+            handled: raw_key_handled.clone(),
+        };
+        if let Some(myself) = Self::get_this(this) {
+            let mut inner = myself.inner.borrow_mut();
+            inner
+                .events
+                .dispatch(WindowEvent::RawKeyEvent(raw_key_event.clone()));
+        }
+        if raw_key_handled.is_handled() {
+            return;
+        }
+        let event = KeyEvent {
+            key: phys.to_key_code(),
+            modifiers,
+            leds,
+            repeat_count: 1,
+            key_is_down,
+            raw: Some(raw_key_event),
+        };
+        if let Some(myself) = Self::get_this(this) {
+            let mut inner = myself.inner.borrow_mut();
+            inner.events.dispatch(WindowEvent::KeyEvent(event));
+        }
     }
 
     extern "C" fn key_down(this: &mut Object, _sel: Sel, nsevent: id) {
@@ -3024,14 +2924,6 @@ impl WindowView {
     }
 
     extern "C" fn did_resize(this: &mut Object, _sel: Sel, _notification: id) {
-        if let Some(this) = Self::get_this(this) {
-            let inner = this.inner.borrow_mut();
-
-            if let Some(gl_context_pair) = inner.gl_context_pair.as_ref() {
-                gl_context_pair.backend.update();
-            }
-        }
-
         Self::sync_backing_layer_scale(this);
 
         let frame = unsafe { NSView::frame(this as *mut _) };
@@ -3135,29 +3027,11 @@ impl WindowView {
     ) {
     }
 
-    /// Whether this view presents through wezterm-gui's MetalPresenter
-    /// (front_end = "WebGpu"). The OpenGL paths keep their old layer setup.
-    fn presents_with_metal(view: &Object) -> bool {
-        let front_end = Self::get_this(view)
-            .and_then(|this| {
-                this.inner
-                    .try_borrow()
-                    .ok()
-                    .map(|inner| inner.config.front_end)
-            })
-            .unwrap_or_else(|| config::configuration().front_end);
-        front_end == config::FrontEndSelection::WebGpu
-    }
-
     /// The scale the backing layer's contents should use. The Metal
     /// presenter draws drawables of backing-pixel size with a non-scaling
     /// gravity, so the layer must use the window's backing scale or a 2x
-    /// drawable would show at twice its size. The OpenGL paths rely on 1.0
-    /// with the default stretching gravity.
+    /// drawable would show at twice its size.
     fn backing_layer_scale(view: &Object, window_scale: Option<CGFloat>) -> CGFloat {
-        if !Self::presents_with_metal(view) {
-            return 1.0;
-        }
         window_scale.unwrap_or_else(|| unsafe {
             let window: id = msg_send![view, window];
             if window.is_null() {
@@ -3176,9 +3050,6 @@ impl WindowView {
     /// Keep the backing layer's contentsScale in step with the window,
     /// for example after a move to a screen with a different scale.
     fn sync_backing_layer_scale(view: &Object) {
-        if !Self::presents_with_metal(view) {
-            return;
-        }
         unsafe {
             let layer: id = msg_send![view, layer];
             if layer.is_null() {
@@ -3239,42 +3110,59 @@ impl WindowView {
                 return;
             }
 
-            if inner.live_resizing {
-                // During a live resize AppKit calls us once per size step
-                // (NSViewLayerContentsRedrawDuringViewResize) and then shows
-                // whatever our GL surface holds, scaled to the new bounds.
-                // If we skip this step because of max_fps throttling, the
-                // user sees the previous frame stretched or squeezed, so
-                // paint now regardless of the throttle.
-                inner.events.dispatch(WindowEvent::NeedRepaint);
-                inner.invalidated = false;
-            } else if inner.paint_throttled {
-                inner.invalidated = true;
-            } else {
-                inner.events.dispatch(WindowEvent::NeedRepaint);
-                inner.invalidated = false;
-                inner.paint_throttled = true;
+            // Paint on every call. Outside a live resize, calls are paced by
+            // the display link (display_link_fired), which only asks for a
+            // display once per refresh, capped by max_fps. During a live
+            // resize AppKit calls us once per size step
+            // (NSViewLayerContentsRedrawDuringViewResize); skipping a step
+            // would show the previous frame at the wrong size.
+            inner.events.dispatch(WindowEvent::NeedRepaint);
+            inner.invalidated = false;
+        }
+    }
 
-                let window_id = inner.window_id;
-                let max_fps = inner.config.max_fps;
-                promise::spawn::spawn(async move {
-                    async_io::Timer::after(std::time::Duration::from_millis(1000 / max_fps as u64))
-                        .await;
-                    Connection::with_window_inner(window_id, move |inner| {
-                        if let Some(window_view) = WindowView::get_this(unsafe { &**inner.view }) {
-                            let mut state = window_view.inner.borrow_mut();
-                            state.paint_throttled = false;
-                            if state.invalidated {
-                                unsafe {
-                                    let () = msg_send![*inner.view, setNeedsDisplay: YES];
-                                }
-                            }
-                        }
-                        Ok(())
-                    });
-                })
-                .detach();
+    /// Called by the view's CADisplayLink once per display refresh while
+    /// it is running. Display the view if something changed since the
+    /// last paint; otherwise pause the link until the next invalidate,
+    /// so an idle window costs nothing.
+    extern "C" fn display_link_fired(view: &mut Object, _sel: Sel, link: id) {
+        let Some(this) = Self::get_this(view) else {
+            return;
+        };
+        let invalidated = this.inner.borrow().invalidated;
+        unsafe {
+            if invalidated {
+                let () = msg_send![view as *mut Object, setNeedsDisplay: YES];
+            } else {
+                let () = msg_send![link, setPaused: YES];
             }
+        }
+    }
+
+    /// Create the view's display link, paused until the first invalidate.
+    fn start_display_link(view: id, max_fps: u64) -> Option<StrongPtr> {
+        unsafe {
+            let responds: BOOL = msg_send![
+                view,
+                respondsToSelector: sel!(displayLinkWithTarget:selector:)
+            ];
+            if responds == NO {
+                log::warn!("NSView.displayLink is unavailable; painting without pacing");
+                return None;
+            }
+            let link: id = msg_send![
+                view,
+                displayLinkWithTarget: view
+                selector: sel!(weztermDisplayLinkFired:)
+            ];
+            if link.is_null() {
+                return None;
+            }
+            let link = StrongPtr::retain(link);
+            let () = msg_send![*link, setPreferredFrameRateRange: frame_rate_range(max_fps)];
+            let run_loop: id = msg_send![class!(NSRunLoop), mainRunLoop];
+            let () = msg_send![*link, addToRunLoop: run_loop forMode: NSRunLoopCommonModes];
+            Some(link)
         }
     }
 
@@ -3356,6 +3244,10 @@ impl WindowView {
             (**view_id).set_ivar(VIEW_CLS_NAME, view as *mut c_void);
         }
 
+        let max_fps = inner.borrow().config.max_fps;
+        let link = Self::start_display_link(*view_id, max_fps);
+        inner.borrow_mut().display_link = link;
+
         Ok(view_id)
     }
 
@@ -3389,6 +3281,11 @@ impl WindowView {
             cls.add_method(
                 sel!(windowWillClose:),
                 Self::window_will_close as extern "C" fn(&mut Object, Sel, id),
+            );
+
+            cls.add_method(
+                sel!(weztermDisplayLinkFired:),
+                Self::display_link_fired as extern "C" fn(&mut Object, Sel, id),
             );
 
             cls.add_method(
@@ -3644,8 +3541,9 @@ impl WindowView {
 /// by motionrec's frames.csv), so recordings can be lined up with steps.
 ///
 /// With `WEZTERM_DEBUG_RESIZE_NOT_LIVE=1` the steps run outside a live
-/// resize, so the max_fps throttle applies and skips steps. That shows
-/// what an undrawn step looks like (the layer's contents gravity).
+/// resize. Each step still displays synchronously through
+/// setFrame:display:YES, but the presents are not tied to the resize
+/// transaction.
 mod debug_resize {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -3742,5 +3640,101 @@ mod debug_resize {
             log::info!("debug-resize end host_time={:.6}", host_time());
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// The display link asks for max_fps, never more than 1000 or less
+    /// than 1, and never sets a minimum above the maximum.
+    #[test]
+    fn frame_rate_range_follows_max_fps() {
+        assert_eq!(
+            frame_rate_range(120),
+            CAFrameRateRange {
+                minimum: 30.,
+                maximum: 120.,
+                preferred: 120.,
+            }
+        );
+        assert_eq!(
+            frame_rate_range(10),
+            CAFrameRateRange {
+                minimum: 10.,
+                maximum: 10.,
+                preferred: 10.,
+            }
+        );
+        assert_eq!(frame_rate_range(0).maximum, 1.);
+        assert_eq!(frame_rate_range(5000).maximum, 1000.);
+    }
+
+    /// flagsChanged events become presses and releases of the right
+    /// modifier key, using the side-specific bits of modifierFlags.
+    #[test]
+    fn modifier_keys_become_key_events() {
+        // Left shift pressed: NSEventModifierFlagShift plus the left bit.
+        assert_eq!(
+            modifier_key_transition(kVK_Shift, 0x2_0000 | 0x2),
+            Some((PhysKeyCode::LeftShift, true))
+        );
+        // Right shift released while left shift is still held.
+        assert_eq!(
+            modifier_key_transition(kVK_RightShift, 0x2_0000 | 0x2),
+            Some((PhysKeyCode::RightShift, false))
+        );
+        assert_eq!(
+            modifier_key_transition(kVK_RightControl, 0x4_0000 | 0x2000),
+            Some((PhysKeyCode::RightControl, true))
+        );
+        assert_eq!(
+            modifier_key_transition(kVK_Option, 0),
+            Some((PhysKeyCode::LeftAlt, false))
+        );
+        assert_eq!(
+            modifier_key_transition(kVK_RightCommand, 0x10_0000 | 0x10),
+            Some((PhysKeyCode::RightWindows, true))
+        );
+        // Caps lock and ordinary keys are not modifier transitions.
+        assert_eq!(modifier_key_transition(0x39, 0x1_0000), None);
+        assert_eq!(modifier_key_transition(0, 0), None);
+    }
+
+    /// The chars/unmod pairs here are what macOS 26 reports for a US
+    /// layout (captured with NSEvent(cgEvent:)). Keys where Ctrl+Shift
+    /// loses the shift take the shifted key from unmod; control
+    /// characters, letters and keys that already agree are left alone.
+    #[test]
+    fn ctrl_shift_takes_shifted_key_from_unmod() {
+        let cs = Modifiers::CTRL | Modifiers::SHIFT;
+        for (chars, unmod) in [
+            (",", "<"),
+            (".", ">"),
+            ("/", "?"),
+            ("=", "+"),
+            ("`", "~"),
+            ("1", "!"),
+        ] {
+            assert!(
+                ctrl_shift_dropped_shift(cs, chars, unmod),
+                "{chars} {unmod}"
+            );
+        }
+        // Control characters are handled by the existing CTRL-A logic.
+        for (chars, unmod) in [("\x01", "A"), ("\x1f", "_"), ("\x1b", "{"), ("\0", "@")] {
+            assert!(
+                !ctrl_shift_dropped_shift(cs, chars, unmod),
+                "{chars:?} {unmod}"
+            );
+        }
+        // Already consistent.
+        assert!(!ctrl_shift_dropped_shift(cs, ":", ":"));
+        // Only Ctrl+Shift, without Alt or Cmd.
+        assert!(!ctrl_shift_dropped_shift(Modifiers::CTRL, ",", "<"));
+        assert!(!ctrl_shift_dropped_shift(Modifiers::SHIFT, ",", "<"));
+        assert!(!ctrl_shift_dropped_shift(cs | Modifiers::ALT, ",", "<"));
+        assert!(!ctrl_shift_dropped_shift(cs | Modifiers::SUPER, ",", "<"));
     }
 }

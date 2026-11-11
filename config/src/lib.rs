@@ -42,6 +42,7 @@ mod units;
 mod unix;
 mod version;
 pub mod window;
+mod window_size;
 
 pub use crate::config::*;
 pub use background::*;
@@ -60,6 +61,7 @@ pub use tls::*;
 pub use units::*;
 pub use unix::*;
 pub use version::*;
+pub use window_size::*;
 
 type ErrorCallback = fn(&str);
 
