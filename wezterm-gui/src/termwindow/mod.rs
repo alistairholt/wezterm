@@ -2896,6 +2896,7 @@ impl TermWindow {
                 let new_window = matches!(assignment, MovePaneToNewWindow);
                 self.move_active_pane_out(new_window)?;
             }
+            MovePaneToTab(n) => self.move_active_pane_to_tab(*n),
             MergeAllWindows => {
                 let mux = Mux::get();
                 let workspace = mux
@@ -4055,6 +4056,57 @@ impl TermWindow {
         })
         .detach();
         Ok(())
+    }
+
+    /// Move the active pane into another tab of this window, split to the
+    /// right of that tab's active pane, like kitty's detach_window to a
+    /// tab. `tab_idx` counts from 0, or from the right when negative, as
+    /// ActivateTab does. If the pane was alone in its tab, that tab
+    /// closes.
+    fn move_active_pane_to_tab(&mut self, tab_idx: isize) {
+        let mux = Mux::get();
+        let Some(pane) = self.get_active_pane_no_overlay() else {
+            return;
+        };
+        let pane_id = pane.pane_id();
+        let target_pane_id = {
+            let Some(window) = mux.get_window(self.mux_window_id) else {
+                return;
+            };
+            let count = window.count_tabs();
+            let idx = if tab_idx < 0 {
+                count.saturating_sub(tab_idx.unsigned_abs())
+            } else {
+                tab_idx as usize
+            };
+            let Some(tab) = window.get_tab_at_idx(idx) else {
+                return;
+            };
+            if tab.contains_pane(pane_id) {
+                return;
+            }
+            let Some(target) = tab.get_active_pane() else {
+                return;
+            };
+            target.pane_id()
+        };
+        promise::spawn::spawn(async move {
+            let mux = Mux::get();
+            if let Err(err) = mux
+                .split_pane(
+                    target_pane_id,
+                    SplitRequest::default(),
+                    mux::domain::SplitSource::MovePane(pane_id),
+                    config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
+                )
+                .await
+            {
+                log::error!("failed to move pane {pane_id} to another tab: {err:#}");
+                return;
+            }
+            mux.focus_pane_and_containing_tab(pane_id).ok();
+        })
+        .detach();
     }
 
     /// Like iTerm2's View > Use Transparency: make a translucent window

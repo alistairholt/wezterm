@@ -175,6 +175,8 @@ As features stabilize some brief notes about them will accumulate here.
   `show_last_non_empty_command_output` does. Needs shell integration.
 * [RenameTab](config/lua/keyassignment/RenameTab.md) asks for a new tab
   title without needing a Lua callback, like kitty's `set_tab_title`.
+* [MovePaneToTab](config/lua/keyassignment/MovePaneToTab.md) moves the
+  active pane into another tab, beside that tab's active pane.
 * [BalancePanes](config/lua/keyassignment/BalancePanes.md) gives the
   panes in each row and column of a tab the same space, like iTerm's
   Arrange Split Panes Evenly.

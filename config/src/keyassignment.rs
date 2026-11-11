@@ -575,6 +575,7 @@ pub enum KeyAssignment {
     MoveTabToNewWindow,
     MovePaneToNewTab,
     MovePaneToNewWindow,
+    MovePaneToTab(isize),
     MergeAllWindows,
     ScrollByPage(NotNan<f64>),
     ScrollByLine(isize),
