@@ -7,7 +7,8 @@ tags:
 {{since('20221119-145034-49b9839f')}}
 
 Specifies the power preference when selecting a webgpu GPU instance.
-This option is only applicable when you have configured `front_end = "WebGpu"`.
+On this macOS-only fork wezterm always renders with Metal, so this always
+applies.
 
 The possible values are:
 
