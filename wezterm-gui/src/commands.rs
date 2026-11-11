@@ -812,6 +812,17 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["WezTerm"],
             icon: None,
         },
+        ToggleAppVisibility => CommandDef {
+            brief: "Show or Hide WezTerm".into(),
+            doc: "Hides WezTerm when it is the active app; otherwise brings \
+              it to the front, opening a window if there is none. This is \
+              what macos_global_hotkey does."
+                .into(),
+            keys: vec![],
+            args: &[],
+            menubar: &[],
+            icon: None,
+        },
         ToggleSecureKeyboardEntry => CommandDef {
             brief: "Secure Keyboard Entry".into(),
             doc: "Toggles Secure Keyboard Entry, which stops other apps \
@@ -2172,6 +2183,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ReloadConfiguration,
         ToggleSecureKeyboardEntry,
         HideApplication,
+        ToggleAppVisibility,
         QuitApplication,
         // ----------------- Shell
         SpawnTab(SpawnTabDomain::CurrentPaneDomain),

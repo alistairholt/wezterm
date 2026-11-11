@@ -13,7 +13,7 @@ use crate::frontend::FrontEndSelection;
 use crate::keyassignment::{
     KeyAssignment, KeyTable, KeyTableEntry, KeyTables, MouseEventTrigger, SpawnCommand,
 };
-use crate::keys::{Key, LeaderKey, Mouse};
+use crate::keys::{Key, KeyNoAction, LeaderKey, Mouse};
 use crate::lua::make_lua_context;
 use crate::ssh::{SshBackend, SshDomain};
 use crate::tls::{TlsDomainClient, TlsDomainServer};
@@ -905,6 +905,10 @@ pub struct Config {
     /// Turn on Secure Keyboard Entry at startup.
     #[dynamic(default)]
     pub macos_secure_keyboard_entry: bool,
+
+    /// A system-wide hotkey that shows and hides WezTerm.
+    #[dynamic(default)]
+    pub macos_global_hotkey: Option<KeyNoAction>,
 
     #[dynamic(default)]
     pub canonicalize_pasted_newlines: Option<NewlineCanon>,

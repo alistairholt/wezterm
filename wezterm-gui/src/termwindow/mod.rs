@@ -2918,6 +2918,9 @@ impl TermWindow {
                 }
                 Err(err) => log::error!("CopyLastCommandOutput: {err:#}"),
             },
+            ToggleAppVisibility => {
+                ::window::os::macos::global_hotkey::toggle_app_visibility();
+            }
             HideApplication => {
                 let con = Connection::get().expect("call on gui thread");
                 con.hide_application();
