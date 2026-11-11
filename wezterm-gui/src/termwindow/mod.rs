@@ -4412,6 +4412,20 @@ pub fn close_tab_with_undo(tab_id: TabId) {
     .detach();
 }
 
+/// Kill every tab waiting for UndoCloseTab. Called when the last
+/// window goes: the waiting tabs' panes would otherwise keep the mux
+/// from being empty, so the app would not quit until their timers ran.
+pub fn discard_closed_tabs() {
+    let closed = CLOSED_TABS.with(|tabs| std::mem::take(&mut *tabs.borrow_mut()));
+    if closed.is_empty() {
+        return;
+    }
+    let mux = Mux::get();
+    for tab in closed {
+        mux.remove_tab(tab.tab_id);
+    }
+}
+
 /// Bring back the most recently closed tab that is still alive, into
 /// the window it came from, or into `fallback_window` if that window
 /// has gone. Returns false if there is nothing to bring back.
