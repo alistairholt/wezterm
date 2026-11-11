@@ -158,6 +158,9 @@ As features stabilize some brief notes about them will accumulate here.
   shows a desktop notification when a long command finishes in a pane
   you aren't looking at, as kitty does. Needs shell integration. Off by
   default.
+* [NotifyWhenCommandFinishes](config/lua/keyassignment/NotifyWhenCommandFinishes.md)
+  notifies you once when the current command finishes, as iTerm2's
+  "Alert on Next Mark" does. Needs shell integration.
 * [remember_window_size](config/lua/config/remember_window_size.md)
   opens new windows at the size of the last window you resized or
   closed, as kitty does. Off by default.

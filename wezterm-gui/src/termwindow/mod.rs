@@ -209,6 +209,9 @@ pub struct PaneState {
     /// The command the shell integration said is running, and when it
     /// started. Used by notify_on_command_finish.
     command_started: Option<(Instant, String)>,
+    /// Set by NotifyWhenCommandFinishes: notify once when the running
+    /// command (or the next one) finishes, whatever the config says.
+    notify_on_next_finish: bool,
     pub mouse_terminal_coords: Option<(ClickPosition, StableRowIndex)>,
 }
 
@@ -2882,6 +2885,15 @@ impl TermWindow {
                     log::error!("ShowLastCommandOutputInPager: {err:#}");
                 }
             }
+            NotifyWhenCommandFinishes => {
+                let state = &mut self.pane_state(pane.pane_id()).notify_on_next_finish;
+                *state = !*state;
+                log::info!(
+                    "pane {}: notify when the command finishes: {}",
+                    pane.pane_id(),
+                    *state
+                );
+            }
             CopyLastCommandOutput => match last_command_output(pane) {
                 Ok(lines) => {
                     let text = lines
@@ -3767,9 +3779,6 @@ impl TermWindow {
     fn track_command_for_notification(&mut self, pane_id: PaneId, value: &str) {
         use config::NotifyOnCommandFinish;
         let mode = self.config.notify_on_command_finish;
-        if mode == NotifyOnCommandFinish::Never {
-            return;
-        }
         if !value.is_empty() {
             self.pane_state(pane_id)
                 .command_started
@@ -3781,17 +3790,18 @@ impl TermWindow {
             return;
         };
         let elapsed = started.elapsed();
-        if elapsed.as_secs_f64() < self.config.notify_on_command_finish_after_secs {
-            return;
-        }
-        let show = match mode {
-            NotifyOnCommandFinish::Never => false,
-            NotifyOnCommandFinish::Unfocused => self.focused.is_none(),
-            NotifyOnCommandFinish::Invisible => {
-                self.focused.is_none() || !self.is_pane_visible(pane_id)
-            }
-            NotifyOnCommandFinish::Always => true,
-        };
+        let requested = std::mem::take(&mut self.pane_state(pane_id).notify_on_next_finish);
+        let long_enough = elapsed.as_secs_f64() >= self.config.notify_on_command_finish_after_secs;
+        let show = requested
+            || long_enough
+                && match mode {
+                    NotifyOnCommandFinish::Never => false,
+                    NotifyOnCommandFinish::Unfocused => self.focused.is_none(),
+                    NotifyOnCommandFinish::Invisible => {
+                        self.focused.is_none() || !self.is_pane_visible(pane_id)
+                    }
+                    NotifyOnCommandFinish::Always => true,
+                };
         log::debug!(
             "command finished in pane {pane_id} after {elapsed:?}: {command:?}; notify={show}"
         );
