@@ -164,6 +164,9 @@ As features stabilize some brief notes about them will accumulate here.
 * [confirm_multiline_paste](config/lua/config/confirm_multiline_paste.md)
   asks before pasting text with a line break into a program that hasn't
   turned on bracketed paste, like kitty and iTerm2. On by default.
+* Finder's Services menu gains "New WezTerm Window Here" and "New WezTerm
+  Tab Here" for folders, like Terminal.app and iTerm2. The tab goes into
+  the WezTerm window you used last.
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.
