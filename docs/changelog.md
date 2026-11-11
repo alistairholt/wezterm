@@ -34,6 +34,9 @@ As features stabilize some brief notes about them will accumulate here.
 * Each changed line on screen is hashed (to look it up in the shaping
   caches) about 3 times faster, which cuts main thread CPU time while
   output scrolls or a full-screen program redraws.
+* The cache of drawn lines stores each line's quads in one block instead of
+  allocating every glyph separately, saving about 30ms of CPU per second
+  while output scrolls.
 * macOS: during a live window resize, each step now waits briefly (up to
   [macos_live_resize_repaint_wait_ms](config/lua/config/macos_live_resize_repaint_wait_ms.md),
   default 8ms) for full-screen programs in the active tab to redraw at the
