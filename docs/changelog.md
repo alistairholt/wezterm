@@ -139,6 +139,10 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* [macos_colorspace](config/lua/config/macos_colorspace.md) sets the
+  color space macOS uses for WezTerm's colors. The default, `"sRGB"`,
+  matches how colors already looked. `"DisplayP3"` gives more saturated
+  colors on a wide gamut display, such as a recent Mac's built-in screen.
 * macOS: Secure Keyboard Entry, as in Terminal.app and iTerm2. Turn it on
   from the WezTerm menu, with
   [ToggleSecureKeyboardEntry](config/lua/keyassignment/ToggleSecureKeyboardEntry.md),

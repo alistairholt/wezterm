@@ -930,6 +930,11 @@ pub struct Config {
     #[dynamic(default)]
     pub macos_global_hotkey: Option<KeyNoAction>,
 
+    /// The color space the window's pixels are tagged with, so macOS
+    /// can convert them to the display's colors.
+    #[dynamic(default)]
+    pub macos_colorspace: MacOsColorSpace,
+
     #[dynamic(default)]
     pub canonicalize_pasted_newlines: Option<NewlineCanon>,
 
@@ -2052,6 +2057,21 @@ pub enum NewlineCanon {
     LineFeed,
     CarriageReturn,
     CarriageReturnAndLineFeed,
+}
+
+/// The color space for `macos_colorspace`.
+#[allow(non_camel_case_types)]
+#[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MacOsColorSpace {
+    /// Colors are sRGB, and macOS converts them for the display.
+    #[default]
+    sRGB,
+    /// Colors are Display P3, so they look more saturated on a wide
+    /// gamut display.
+    DisplayP3,
+    /// Colors aren't tagged, and macOS decides how to show them. On
+    /// macOS 27 this looks the same as sRGB.
+    None,
 }
 
 #[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, Default)]

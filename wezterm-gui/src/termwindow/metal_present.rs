@@ -69,6 +69,35 @@ extern "C" {
     static kCAGravityBottomLeft: *mut Object;
 }
 
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    static kCGColorSpaceSRGB: *const std::ffi::c_void;
+    static kCGColorSpaceDisplayP3: *const std::ffi::c_void;
+    fn CGColorSpaceCreateWithName(name: *const std::ffi::c_void) -> *mut std::ffi::c_void;
+    fn CGColorSpaceRelease(space: *mut std::ffi::c_void);
+}
+
+/// Tag the layer's pixels with `space`, so Core Animation converts them
+/// to the display's colors. `None` leaves the layer untagged; on macOS 27
+/// the window server then treats the pixels as sRGB, the same as `sRGB`.
+unsafe fn set_layer_colorspace(layer: *mut Object, space: config::MacOsColorSpace) {
+    let name = match space {
+        config::MacOsColorSpace::sRGB => kCGColorSpaceSRGB,
+        config::MacOsColorSpace::DisplayP3 => kCGColorSpaceDisplayP3,
+        config::MacOsColorSpace::None => std::ptr::null(),
+    };
+    let cs = if name.is_null() {
+        std::ptr::null_mut()
+    } else {
+        CGColorSpaceCreateWithName(name)
+    };
+    // The layer retains the color space.
+    let () = msg_send![layer, setColorspace: cs];
+    if !cs.is_null() {
+        CGColorSpaceRelease(cs);
+    }
+}
+
 /// The layer's `contentsGravity`, as a Rust string.
 unsafe fn layer_gravity(layer: *mut Object) -> String {
     let gravity: *mut Object = msg_send![layer, contentsGravity];
@@ -147,6 +176,12 @@ impl MetalPresenter {
         format: wgpu::TextureFormat,
     ) -> anyhow::Result<Self> {
         Self::new_impl(layer, device, format, false)
+    }
+
+    /// Set the color space the layer's pixels are tagged with. Cheap
+    /// enough to call on every config reload.
+    pub fn set_colorspace(&self, space: config::MacOsColorSpace) {
+        unsafe { set_layer_colorspace(self.layer.as_ptr() as *mut Object, space) };
     }
 
     /// `readable` makes drawable textures copyable, for tests only; it

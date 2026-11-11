@@ -1820,6 +1820,9 @@ impl TermWindow {
         self.input_map = InputMap::new(&config);
         self.leader_is_down = None;
         self.render_state.as_mut().map(|rs| rs.config_changed());
+        if let Some(webgpu) = &self.webgpu {
+            webgpu.presenter.set_colorspace(config.macos_colorspace);
+        }
         let dimensions = self.dimensions;
 
         if let Err(err) = self.fonts.config_changed(&config) {
