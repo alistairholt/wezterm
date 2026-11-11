@@ -20,9 +20,17 @@ return config
 You can find a list of available color schemes and screenshots
 in [The Color Schemes Section](../colorschemes/index.md).
 
-If you'd like to automatically adjust your color scheme based on the
-system dark mode or light mode appearance, see the example in
-[wezterm.gui.get_appearance()](lua/wezterm.gui/get_appearance.md)
+To follow the system's light or dark mode, set
+[color_scheme_light](lua/config/color_scheme_light.md) and
+[color_scheme_dark](lua/config/color_scheme_dark.md):
+
+```lua
+config.color_scheme_light = 'Builtin Solarized Light'
+config.color_scheme_dark = 'Builtin Solarized Dark'
+```
+
+For more control, see the example in
+[wezterm.gui.get_appearance()](lua/wezterm.gui/get_appearance.md).
 
 !!! note
     if you are using multiplexing with ssh or tls domains, the color scheme

@@ -139,6 +139,13 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* Right-click shows a context menu, like Terminal.app's: open or copy a
+  link, copy, paste, select all, split the pane, clear the scrollback
+  or close the pane. See
+  [ShowContextMenu](config/lua/keyassignment/ShowContextMenu.md).
+* [color_scheme_light](config/lua/config/color_scheme_light.md) and
+  [color_scheme_dark](config/lua/config/color_scheme_dark.md) pick a
+  color scheme for each system appearance, and switch when macOS does.
 * Prompts get a green or red mark in the gutter when their command
   finishes, from the exit status shell integration reports, like
   iTerm2's marks. Click a mark to select that command's output. See

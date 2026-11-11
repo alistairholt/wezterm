@@ -452,6 +452,25 @@ pub fn reload() {
     CONFIG.reload();
 }
 
+/// 0: unknown, 1: light, 2: dark.
+static SYSTEM_APPEARANCE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Tells the config whether the system is in dark mode, so that
+/// color_scheme_light and color_scheme_dark apply. The GUI sets this
+/// before it reloads the config. Takes effect on the next reload.
+pub fn set_system_dark_mode(dark: bool) {
+    SYSTEM_APPEARANCE.store(if dark { 2 } else { 1 }, Ordering::Relaxed);
+}
+
+/// Whether the system is in dark mode, or `None` if no GUI has said.
+pub fn system_dark_mode() -> Option<bool> {
+    match SYSTEM_APPEARANCE.load(Ordering::Relaxed) {
+        1 => Some(false),
+        2 => Some(true),
+        _ => None,
+    }
+}
+
 /// If there was an error loading the preferred configuration,
 /// return it, otherwise return the current configuration
 pub fn configuration_result() -> Result<ConfigHandle, Error> {

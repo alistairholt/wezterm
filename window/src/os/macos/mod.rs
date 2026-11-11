@@ -10,6 +10,7 @@ mod app;
 pub mod bitmap;
 pub mod clipboard;
 pub mod connection;
+pub mod context_menu;
 pub mod dock;
 pub mod global_hotkey;
 pub mod menu;

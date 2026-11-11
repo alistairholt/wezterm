@@ -963,6 +963,7 @@ impl TermWindow {
                 // global config here once per window, which could
                 // be nasty for folks with a lot of windows.
                 // <https://github.com/wezterm/wezterm/issues/2295>
+                note_system_appearance(appearance);
                 config::reload();
                 self.config_was_reloaded();
                 Ok(true)
@@ -3053,6 +3054,7 @@ impl TermWindow {
             OpenFileAtMouseCursor => {
                 self.do_open_file_at_mouse_cursor(pane);
             }
+            ShowContextMenu => self.show_context_menu(pane),
             EmitEvent(name) => {
                 self.emit_window_event(name, None);
             }
@@ -3439,6 +3441,80 @@ impl TermWindow {
             .detach();
         }
     }
+    /// Shows the right-click menu, like Terminal.app's: link actions when
+    /// the pointer is over a link, then copy and paste, splits, and
+    /// clearing or closing the pane.
+    fn show_context_menu(&self, pane: &Arc<dyn Pane>) {
+        use ::window::os::macos::context_menu::{show_context_menu, ContextMenuItem};
+        use config::keyassignment::{
+            ClipboardCopyDestination, ClipboardPasteSource, ScrollbackEraseMode, SpawnCommand,
+        };
+
+        fn item(title: &str, action: KeyAssignment) -> ContextMenuItem {
+            ContextMenuItem::Action {
+                title: title.to_string(),
+                action,
+                enabled: true,
+            }
+        }
+
+        let mut items = vec![];
+        if let Some(link) = &self.current_highlight {
+            let uri = link.uri().to_string();
+            items.push(item("Open Link", KeyAssignment::OpenUri(uri.clone())));
+            items.push(item(
+                "Copy Link",
+                KeyAssignment::CopyTextTo {
+                    text: uri,
+                    destination: ClipboardCopyDestination::Clipboard,
+                },
+            ));
+            items.push(ContextMenuItem::Separator);
+        }
+        items.push(ContextMenuItem::Action {
+            title: "Copy".to_string(),
+            action: KeyAssignment::CopyTo(ClipboardCopyDestination::Clipboard),
+            enabled: !self.selection_text(pane).is_empty(),
+        });
+        items.push(item(
+            "Paste",
+            KeyAssignment::PasteFrom(ClipboardPasteSource::Clipboard),
+        ));
+        items.push(item("Select All", KeyAssignment::SelectAll));
+        items.push(ContextMenuItem::Separator);
+        items.push(item(
+            "Split Right",
+            KeyAssignment::SplitHorizontal(SpawnCommand::default()),
+        ));
+        items.push(item(
+            "Split Down",
+            KeyAssignment::SplitVertical(SpawnCommand::default()),
+        ));
+        items.push(ContextMenuItem::Separator);
+        items.push(item(
+            "Clear Scrollback",
+            KeyAssignment::ClearScrollback(ScrollbackEraseMode::ScrollbackOnly),
+        ));
+        items.push(item(
+            "Close Pane",
+            KeyAssignment::CloseCurrentPane { confirm: true },
+        ));
+
+        // The menu runs its own event loop and sends the chosen action
+        // back to this window, so it can't be shown while this event is
+        // still being handled.
+        // Open it where the click was, in points.
+        let scale = self.dimensions.dpi as f64 / 72.0;
+        let at = self
+            .current_mouse_event
+            .as_ref()
+            .map(|event| (event.coords.x as f64 / scale, event.coords.y as f64 / scale));
+        promise::spawn::spawn(async move {
+            show_context_menu(items, at);
+        })
+        .detach();
+    }
+
     /// Opens the link under the mouse cursor, or failing that, the file
     /// whose path is the text under it.
     fn do_open_file_at_mouse_cursor(&self, pane: &Arc<dyn Pane>) {
@@ -4408,6 +4484,13 @@ fn last_command_output(pane: &Arc<dyn Pane>) -> anyhow::Result<Vec<wezterm_term:
 
 /// Like `last_command_output`, but also returns the zone, so callers
 /// know where the output sits in the scrollback.
+/// Tells the config crate whether the system is in dark mode, for
+/// color_scheme_light and color_scheme_dark.
+pub fn note_system_appearance(appearance: ::window::Appearance) {
+    use ::window::Appearance::*;
+    config::set_system_dark_mode(matches!(appearance, Dark | DarkHighContrast));
+}
+
 fn last_command_output_zone(
     pane: &Arc<dyn Pane>,
 ) -> anyhow::Result<(wezterm_term::SemanticZone, Vec<wezterm_term::Line>)> {

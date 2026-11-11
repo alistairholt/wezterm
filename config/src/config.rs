@@ -203,6 +203,14 @@ pub struct Config {
     /// by the colors setting.
     pub color_scheme: Option<String>,
 
+    /// The color scheme to use while the system is in light mode.
+    /// Falls back to color_scheme.
+    pub color_scheme_light: Option<String>,
+
+    /// The color scheme to use while the system is in dark mode.
+    /// Falls back to color_scheme.
+    pub color_scheme_dark: Option<String>,
+
     /// Named color schemes
     #[dynamic(default)]
     pub color_schemes: HashMap<String, Palette>,
@@ -1434,6 +1442,14 @@ impl Config {
         cfg.load_color_schemes(&cfg.compute_color_scheme_dirs())
             .ok();
 
+        if let Some(scheme) = scheme_for_appearance(
+            crate::system_dark_mode(),
+            &cfg.color_scheme_light,
+            &cfg.color_scheme_dark,
+        ) {
+            cfg.color_scheme = Some(scheme.clone());
+        }
+
         if let Some(scheme) = cfg.color_scheme.as_ref() {
             match cfg.resolve_color_scheme() {
                 None => {
@@ -2399,5 +2415,41 @@ mod test {
             }
             assert_same(&line, &ours, &upstream);
         }
+    }
+}
+
+/// Picks color_scheme_light or color_scheme_dark for the system
+/// appearance. `dark` is `None` when the appearance isn't known, as in
+/// the mux server; then neither applies and color_scheme is used.
+fn scheme_for_appearance<'a>(
+    dark: Option<bool>,
+    light_scheme: &'a Option<String>,
+    dark_scheme: &'a Option<String>,
+) -> Option<&'a String> {
+    match dark? {
+        true => dark_scheme.as_ref(),
+        false => light_scheme.as_ref(),
+    }
+}
+
+#[cfg(test)]
+mod appearance_test {
+    use super::scheme_for_appearance;
+
+    #[test]
+    fn scheme_follows_appearance() {
+        let light = Some("Light".to_string());
+        let dark = Some("Dark".to_string());
+        assert_eq!(
+            scheme_for_appearance(Some(true), &light, &dark),
+            dark.as_ref()
+        );
+        assert_eq!(
+            scheme_for_appearance(Some(false), &light, &dark),
+            light.as_ref()
+        );
+        // Unknown appearance, or no scheme set for this one: use color_scheme.
+        assert_eq!(scheme_for_appearance(None, &light, &dark), None);
+        assert_eq!(scheme_for_appearance(Some(true), &light, &None), None);
     }
 }

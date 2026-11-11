@@ -1918,6 +1918,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Shell"],
             icon: None,
         },
+        ShowContextMenu => CommandDef {
+            brief: "Show context menu".into(),
+            doc: "Shows a menu of actions for the pane at the mouse pointer.".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &[],
+            icon: None,
+        },
         OpenFileAtMouseCursor => CommandDef {
             brief: "Open file at mouse cursor".into(),
             doc: "Opens the link, or the file named by the text, under the mouse cursor. \
