@@ -255,17 +255,29 @@ impl GuiFrontEnd {
                     use config::keyassignment::SpawnTabDomain;
                     use wezterm_term::TerminalSize;
 
-                    // We send the script to execute to the shell on stdin, rather than ask the
-                    // shell to execute it directly, so that we start the shell and read in the
-                    // user's rc files before running the script.  Without this, wezterm on macOS
-                    // is launched with a default and very anemic path, and that is frustrating for
-                    // users.
+                    // Run the script through the user's shell as a login,
+                    // interactive shell, so it reads the user's rc files
+                    // first. Without them, wezterm on macOS is launched with
+                    // a very bare PATH. This used to type the command into
+                    // a new shell instead, but shells that discard input
+                    // typed before their first prompt then never ran it.
 
                     let mux = Mux::get();
                     let window_id = None;
                     let pane_id = None;
-                    let cmd = None;
-                    let cwd = if is_dir { Some(file_name.clone()) } else { None };
+                    let cmd = if is_dir {
+                        None
+                    } else {
+                        let shell = portable_pty::CommandBuilder::new_default_prog().get_shell();
+                        let mut cmd = portable_pty::CommandBuilder::new(shell);
+                        cmd.args(["-l", "-i", "-c", &quoted_file_name]);
+                        Some(cmd)
+                    };
+                    let cwd = if is_dir {
+                        Some(file_name.clone())
+                    } else {
+                        None
+                    };
                     let workspace = mux.active_workspace();
 
                     match mux
@@ -283,10 +295,6 @@ impl GuiFrontEnd {
                     {
                         Ok((_tab, pane, _window_id)) => {
                             log::trace!("Spawned {file_name} as pane_id {}", pane.pane_id());
-                            if !is_dir {
-                                let mut writer = pane.writer();
-                                write!(writer, "{quoted_file_name} ; exit\n").ok();
-                            }
                         }
                         Err(err) => {
                             log::error!("Failed to spawn {file_name}: {err:#?}");
