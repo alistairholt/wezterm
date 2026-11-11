@@ -812,6 +812,16 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["WezTerm"],
             icon: None,
         },
+        CopyOrInterrupt => CommandDef {
+            brief: "Copy or interrupt".into(),
+            doc: "Copies the selection to the clipboard if there is one; \
+              otherwise sends Ctrl-C to the pane."
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &[],
+            icon: Some("md_content_copy"),
+        },
         ToggleAppVisibility => CommandDef {
             brief: "Show or Hide WezTerm".into(),
             doc: "Hides WezTerm when it is the active app; otherwise brings \

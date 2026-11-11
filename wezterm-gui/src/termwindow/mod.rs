@@ -2748,6 +2748,21 @@ impl TermWindow {
                 let text = self.selection_text(pane);
                 self.copy_to_clipboard(*dest, text);
             }
+            CopyOrInterrupt => {
+                // Like kitty's copy_or_interrupt.
+                let text = self.selection_text(pane);
+                if text.is_empty() {
+                    pane.key_down(
+                        wezterm_term::KeyCode::Char('c'),
+                        wezterm_term::KeyModifiers::CTRL,
+                    )?;
+                } else {
+                    self.copy_to_clipboard(
+                        config::keyassignment::ClipboardCopyDestination::Clipboard,
+                        text,
+                    );
+                }
+            }
             CopyTextTo { text, destination } => {
                 self.copy_to_clipboard(*destination, text.clone());
             }
