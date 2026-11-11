@@ -519,6 +519,12 @@ pub struct Config {
     #[dynamic(default = "default_true")]
     pub use_fancy_tab_bar: bool,
 
+    /// How the fancy tab bar draws its tabs: "Default" (rounded tops that
+    /// join the pane), "Flat" (no tab shapes, thin dividers between tabs)
+    /// or "Capsule" (the active tab is a rounded pill).
+    #[dynamic(default)]
+    pub fancy_tab_style: FancyTabStyle,
+
     #[dynamic(default)]
     pub tab_bar_at_bottom: bool,
 
@@ -2007,6 +2013,19 @@ fn default_inactive_pane_hsb() -> HsbTransform {
     }
 }
 
+#[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FancyTabStyle {
+    /// Rounded tab tops, with the active tab joined to the pane below.
+    #[default]
+    Default,
+    /// No tab shapes: tabs sit on the bar, split by thin dividers, and the
+    /// active tab is told apart by its text color.
+    Flat,
+    /// As Flat, but the active tab is a rounded pill in the active tab
+    /// color, with no dividers next to it.
+    Capsule,
+}
+
 #[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, Default)]
 pub enum DefaultCursorStyle {
     BlinkingBlock,
@@ -2490,5 +2509,20 @@ mod appearance_test {
         frame.follow_tab_bar(&tab_bar);
         assert_eq!(frame.active_titlebar_bg, tab_bar.background());
         assert_eq!(frame.inactive_titlebar_bg, custom);
+    }
+
+    #[test]
+    fn fancy_tab_style_from_config() {
+        use crate::FancyTabStyle;
+        use wezterm_dynamic::{FromDynamic, FromDynamicOptions, Value};
+        // Config files name the style as a string; leaving it out keeps
+        // the tab shape WezTerm has always drawn.
+        let parse = |s: &str| {
+            FancyTabStyle::from_dynamic(&Value::String(s.into()), FromDynamicOptions::default())
+        };
+        assert_eq!(parse("Flat").unwrap(), FancyTabStyle::Flat);
+        assert_eq!(parse("Capsule").unwrap(), FancyTabStyle::Capsule);
+        assert!(parse("Pill").is_err());
+        assert_eq!(FancyTabStyle::default(), FancyTabStyle::Default);
     }
 }

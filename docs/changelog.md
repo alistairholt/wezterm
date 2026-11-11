@@ -22,6 +22,10 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* The tab bar runs `format-tab-title` again on every status update and
+  whenever a pane's user var changes, not only when the status text
+  changes. Tab titles built from the time (an animated spinner) or from
+  user vars now update without tricks to change the status text.
 * The default [hyperlink_rules](config/lua/config/hyperlink_rules.md) no
   longer use `\b` or a lookahead, so they run in the fast regex engine
   instead of the backtracking one. They find the same links, and scanning
@@ -139,6 +143,9 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* [fancy_tab_style](config/lua/config/fancy_tab_style.md) draws the fancy
+  tab bar's tabs flat with thin dividers, or with the active tab as a
+  rounded pill, without needing a `format-tab-title` handler to fake it.
 * Right-click shows a context menu, like Terminal.app's: open or copy a
   link, copy, paste, select all, split the pane, clear the scrollback
   or close the pane. See

@@ -6,7 +6,7 @@ use crate::termwindow::render::corners::*;
 use crate::termwindow::render::window_buttons::window_button_element;
 use crate::termwindow::{UIItem, UIItemType};
 use crate::utilsprites::RenderMetrics;
-use config::{Dimension, DimensionContext, TabBarColors};
+use config::{Dimension, DimensionContext, FancyTabStyle, TabBarColors};
 use std::rc::Rc;
 use wezterm_font::LoadedFont;
 use wezterm_term::color::{ColorAttribute, ColorPalette};
@@ -89,6 +89,27 @@ impl crate::TermWindow {
             .to_linear()
             .into(),
         };
+        let bar_bg = if self.focused.is_some() {
+            self.config.window_frame.active_titlebar_bg
+        } else {
+            self.config.window_frame.inactive_titlebar_bg
+        }
+        .to_linear();
+        let style = self.config.fancy_tab_style;
+        let active_idx = items.iter().find_map(|item| match item.item {
+            TabBarItem::Tab {
+                tab_idx,
+                active: true,
+            } => Some(tab_idx),
+            _ => None,
+        });
+        let tab_count = items
+            .iter()
+            .filter(|item| matches!(item.item, TabBarItem::Tab { .. }))
+            .count();
+        // A pill as tall as a tab: one line plus its padding above and below.
+        let pill_radius = Dimension::Pixels(metrics.cell_size.height as f32 * 0.75);
+
         let tab_vertical_alignment = if self.config.tab_bar_at_bottom {
             VerticalAlign::Top
         } else {
@@ -172,6 +193,84 @@ impl crate::TermWindow {
                     bg: new_tab_hover.bg_color.to_linear().into(),
                     text: new_tab_hover.fg_color.to_linear().into(),
                 })),
+                TabBarItem::Tab { tab_idx, active } if style != FancyTabStyle::Default => {
+                    let pill = style == FancyTabStyle::Capsule && active;
+                    // A divider on the right edge, between this tab and the
+                    // next; none after the last tab or beside the pill.
+                    let beside_pill = style == FancyTabStyle::Capsule
+                        && (active || active_idx == Some(tab_idx + 1));
+                    let divider = tab_idx + 1 < tab_count && !beside_pill;
+                    let edge = colors.inactive_tab_edge().to_linear();
+                    let (bg, fg) = if active {
+                        let bg = if pill {
+                            bg_color
+                                .unwrap_or_else(|| active_tab.bg_color.into())
+                                .to_linear()
+                        } else {
+                            bg_color.map(|c| c.to_linear()).unwrap_or(bar_bg)
+                        };
+                        (bg, fg_color.unwrap_or_else(|| active_tab.fg_color.into()))
+                    } else {
+                        let inactive_tab = colors.inactive_tab();
+                        (
+                            bg_color.map(|c| c.to_linear()).unwrap_or(bar_bg),
+                            fg_color.unwrap_or_else(|| inactive_tab.fg_color.into()),
+                        )
+                    };
+                    let border_color = BorderColor {
+                        left: bg,
+                        right: if divider { edge } else { bg },
+                        top: bg,
+                        bottom: bg,
+                    };
+                    let hover_fg =
+                        fg_color.unwrap_or_else(|| colors.inactive_tab_hover().fg_color.into());
+                    let rounded = |poly| SizedPoly {
+                        width: pill_radius,
+                        height: pill_radius,
+                        poly,
+                    };
+                    element
+                        .vertical_align(VerticalAlign::Middle)
+                        .item_type(UIItemType::TabBar(item.item.clone()))
+                        .margin(BoxDimension::new(Dimension::Cells(0.)))
+                        .padding(BoxDimension {
+                            left: Dimension::Cells(0.75),
+                            right: Dimension::Cells(0.75),
+                            top: Dimension::Cells(0.25),
+                            bottom: Dimension::Cells(0.25),
+                        })
+                        .border(BoxDimension {
+                            left: Dimension::Pixels(0.),
+                            right: Dimension::Pixels(if divider { 1. } else { 0. }),
+                            top: Dimension::Pixels(0.),
+                            bottom: Dimension::Pixels(0.),
+                        })
+                        .border_corners(if pill {
+                            Some(Corners {
+                                top_left: rounded(TOP_LEFT_ROUNDED_CORNER),
+                                top_right: rounded(TOP_RIGHT_ROUNDED_CORNER),
+                                bottom_left: rounded(BOTTOM_LEFT_ROUNDED_CORNER),
+                                bottom_right: rounded(BOTTOM_RIGHT_ROUNDED_CORNER),
+                            })
+                        } else {
+                            None
+                        })
+                        .colors(ElementColors {
+                            border: border_color.clone(),
+                            bg: bg.into(),
+                            text: fg.to_linear().into(),
+                        })
+                        .hover_colors(if active {
+                            None
+                        } else {
+                            Some(ElementColors {
+                                border: border_color,
+                                bg: bg.into(),
+                                text: hover_fg.to_linear().into(),
+                            })
+                        })
+                }
                 TabBarItem::Tab { active, .. } if active => element
                     .vertical_align(tab_vertical_alignment)
                     .item_type(UIItemType::TabBar(item.item.clone()))
