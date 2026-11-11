@@ -3731,6 +3731,7 @@ impl Drop for TermWindow {
         self.mux_subscription_dead.store(true, Ordering::Relaxed);
         self.clear_all_overlays();
         set_unseen_bell_count(self.mux_window_id, 0);
+        self.remember_window_size();
         if let Some(window) = self.window.take() {
             if let Some(fe) = try_front_end() {
                 fe.forget_known_window(&window);
