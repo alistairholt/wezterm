@@ -386,6 +386,9 @@ pub struct TermWindow {
     pub window: Option<Window>,
     pub config: ConfigHandle,
     pub config_overrides: wezterm_dynamic::Value,
+    /// ToggleWindowOpacity put window_background_opacity = 1.0 into
+    /// config_overrides.
+    opacity_override_set: bool,
     os_parameters: Option<parameters::Parameters>,
     /// When we most recently received keyboard focus
     pub focused: Option<Instant>,
@@ -722,6 +725,7 @@ impl TermWindow {
             window_background,
             config: config.clone(),
             config_overrides: wezterm_dynamic::Value::default(),
+            opacity_override_set: false,
             palette: None,
             focused: None,
             mux_window_id,
@@ -2886,6 +2890,7 @@ impl TermWindow {
                 }
             }
             SaveScrollbackToFile => self.save_scrollback_to_file(pane),
+            ToggleWindowOpacity => self.toggle_window_opacity(),
             NotifyWhenCommandFinishes => {
                 let state = &mut self.pane_state(pane.pane_id()).notify_on_next_finish;
                 *state = !*state;
@@ -3826,6 +3831,33 @@ impl TermWindow {
     /// for colors and attributes, to a private temporary file and open
     /// it with `scrollback_pager` in a new tab, as the pager's standard
     /// input. The file is removed as soon as the pager has it open.
+    /// Like iTerm2's View > Use Transparency: make a translucent window
+    /// opaque by overriding window_background_opacity for this window,
+    /// and remove that override to make it translucent again.
+    fn toggle_window_opacity(&mut self) {
+        use wezterm_dynamic::{Object, ToDynamic, Value};
+        const KEY: &str = "window_background_opacity";
+
+        let mut overrides = match &self.config_overrides {
+            Value::Object(obj) => obj.clone(),
+            _ => Object::default(),
+        };
+        let key = Value::String(KEY.to_string());
+        let opaque = Some(1.0f64.to_dynamic());
+        if self.opacity_override_set && overrides.get(&key) == opaque.as_ref() {
+            overrides.remove(&key);
+            self.opacity_override_set = false;
+        } else if self.config.window_background_opacity < 1.0 {
+            overrides.insert(key, 1.0f64.to_dynamic());
+            self.opacity_override_set = true;
+        } else {
+            log::info!("ToggleWindowOpacity: the window is already opaque");
+            return;
+        }
+        self.config_overrides = Value::Object(overrides);
+        self.config_was_reloaded();
+    }
+
     /// Like iTerm2's Save Contents: ask where to save, then write the
     /// pane's scrollback and screen there as plain text.
     fn save_scrollback_to_file(&mut self, pane: &Arc<dyn Pane>) {

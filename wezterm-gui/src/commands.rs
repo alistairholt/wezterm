@@ -825,6 +825,16 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Shell"],
             icon: Some("md_broadcast"),
         },
+        ToggleWindowOpacity => CommandDef {
+            brief: "Toggle window transparency".into(),
+            doc: "Makes a translucent window opaque, or back again. \
+              Uses window_background_opacity."
+                .into(),
+            keys: vec![],
+            args: &[],
+            menubar: &["View"],
+            icon: Some("md_opacity"),
+        },
         SaveScrollbackToFile => CommandDef {
             brief: "Save contents...".into(),
             doc: "Saves the current pane's scrollback and screen as \
@@ -2183,6 +2193,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         IncreaseFontSize,
         ResetFontSize,
         ResetFontAndWindowSize,
+        ToggleWindowOpacity,
         ScrollByPage(NotNan::new(-1.0).unwrap()),
         ScrollByPage(NotNan::new(1.0).unwrap()),
         ScrollToTop,

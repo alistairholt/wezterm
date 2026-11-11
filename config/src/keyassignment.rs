@@ -582,6 +582,7 @@ pub enum KeyAssignment {
     CopyLastCommandOutput,
     NotifyWhenCommandFinishes,
     SaveScrollbackToFile,
+    ToggleWindowOpacity,
     ToggleBroadcastInput,
     HideApplication,
     ToggleSecureKeyboardEntry,
