@@ -235,7 +235,8 @@ As features stabilize some brief notes about them will accumulate here.
 * Kitty keyboard protocol: a key typed without Shift is no longer reported
   as the US key it would be shifted from (a `^` from a dead key on an
   AZERTY layout was reported as `6`), and the shifted alternate key is
-  only reported while Shift is held. #4916
+  only reported while Shift is held. Caps Lock
+  letters outside ASCII are reported in lower case too. #4916
 * macOS: pressing or releasing a modifier key on its own (Shift, Control,
   Option, Command) is now reported to apps that ask the kitty keyboard
   protocol to report all keys as escape codes. Other apps, copy mode and

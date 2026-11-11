@@ -356,7 +356,10 @@ impl super::TermWindow {
                         && !(config.send_composed_key_when_left_alt_is_pressed
                              || config.send_composed_key_when_right_alt_is_pressed));
 
-            if bypass_compose {
+            // A lone modifier key (Option itself) is handled at the end of
+            // key_event_impl. Sending it to the pane here would reach
+            // overlays such as copy mode and cancel a pending jump.
+            if bypass_compose && !keycode.is_modifier() {
                 if let Key::Code(term_key) = self.win_key_code_to_termwiz_key_code(keycode) {
                     let tw_raw_modifiers = raw_modifiers;
 
@@ -645,8 +648,12 @@ impl super::TermWindow {
         // A modifier key pressed or released on its own only matters to
         // an app that asked the kitty keyboard protocol for it. Don't let
         // it reach overlays such as copy mode (where it would cancel a
-        // pending jump) or end an `until_unknown` key table.
+        // pending jump) or end an `until_unknown` key table. While a modal
+        // such as the command palette has focus, the pane gets nothing.
         if window_key.key.is_modifier() {
+            if self.get_modal().is_some() {
+                return;
+            }
             if let Some(encoded) = self.encode_kitty_input(&pane, &window_key) {
                 if !encoded.is_empty() {
                     if self.config.debug_key_events {
