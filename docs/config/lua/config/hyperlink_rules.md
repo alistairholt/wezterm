@@ -54,30 +54,39 @@ config.hyperlink_rules = {
     format = '$1',
     highlight = 1,
   },
-  -- Matches: a URL in curly braces: {URL}
-  {
-    regex = '\\{(\\w+://\\S+)\\}',
-    format = '$1',
-    highlight = 1,
-  },
   -- Matches: a URL in angle brackets: <URL>
   {
     regex = '<(\\w+://\\S+)>',
     format = '$1',
     highlight = 1,
   },
+  -- Matches: a URL that ends with a balanced parenthesis, e.g.
+  -- https://en.wikipedia.org/wiki/Rust_(programming_language)
+  {
+    regex = '(\\w+://[^\\s()]*\\(\\S*\\))(?:\\s|$|[^_/a-zA-Z0-9-])',
+    format = '$1',
+    highlight = 1,
+  },
   -- Then handle URLs not wrapped in brackets
   {
-    regex = '\\b\\w+://\\S+[)/a-zA-Z0-9-]+',
+    regex = '\\w+://\\S+[_/a-zA-Z0-9-]',
     format = '$0',
   },
   -- implicit mailto link
   {
-    regex = '\\b\\w+@[\\w-]+(\\.[\\w-]+)+\\b',
+    regex = '\\w+@[\\w-]+(?:\\.[\\w-]+)*\\.[\\w-]*\\w',
     format = 'mailto:$0',
   },
 }
 ```
+
+!!! tip
+    Rules are checked against every line that changes on screen, so a slow
+    rule costs time on every frame while output scrolls. A rule that uses
+    `\b`, a lookahead or lookbehind such as `(?=...)`, or a backreference
+    runs in a backtracking regex engine that is about 100 times slower
+    than one that doesn't (around 4µs per line instead of 40ns). The
+    default rules avoid them; where you can, do the same in your own rules.
 
 !!! note
     In quoted Lua string literals the backslash character must be
