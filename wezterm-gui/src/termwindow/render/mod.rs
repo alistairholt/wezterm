@@ -41,6 +41,7 @@ pub mod fancy_tab_bar;
 pub mod paint;
 pub mod pane;
 pub mod screen_line;
+mod shape_hash;
 pub mod split;
 pub mod tab_bar;
 pub mod window_buttons;
@@ -909,7 +910,7 @@ impl crate::TermWindow {
             id
         });
 
-        let shape_hash = line.compute_shape_hash();
+        let shape_hash = shape_hash::line_shape_hash(line);
 
         let state = Arc::new(CachedLineState {
             id,
