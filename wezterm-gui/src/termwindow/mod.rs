@@ -2814,6 +2814,48 @@ impl TermWindow {
                 };
                 self.show_launcher_impl(args, 0);
             }
+            MoveTabToNewWindow => {
+                let mux = Mux::get();
+                let tab_count = mux
+                    .get_window(self.mux_window_id)
+                    .map(|w| w.iter_tabs().count())
+                    .unwrap_or(0);
+                // A lone tab is already in a window of its own.
+                if tab_count > 1 {
+                    if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+                        mux.move_tab_to_window(tab.tab_id(), None)?;
+                    }
+                }
+            }
+            MergeAllWindows => {
+                let mux = Mux::get();
+                let workspace = mux
+                    .get_window(self.mux_window_id)
+                    .map(|w| w.get_workspace().to_string());
+                if let Some(workspace) = workspace {
+                    let active_tab = mux.get_active_tab_for_window(self.mux_window_id);
+                    for window_id in mux.iter_windows_in_workspace(&workspace) {
+                        if window_id == self.mux_window_id {
+                            continue;
+                        }
+                        let tab_ids: Vec<TabId> = match mux.get_window(window_id) {
+                            Some(w) => w.iter_tabs().map(|t| t.tab_id()).collect(),
+                            None => continue,
+                        };
+                        for tab_id in tab_ids {
+                            mux.move_tab_to_window(tab_id, Some(self.mux_window_id))?;
+                        }
+                    }
+                    // Stay on the tab you were using.
+                    if let Some(tab) = active_tab {
+                        if let Some(mut window) = mux.get_window_mut(self.mux_window_id) {
+                            if let Some(idx) = window.get_tab_idx_for_id(tab.tab_id()) {
+                                window.set_active_tab_idx_without_saving(idx);
+                            }
+                        }
+                    }
+                }
+            }
             ToggleBroadcastInput => {
                 if let Some(tab) = Mux::get().get_active_tab_for_window(self.mux_window_id) {
                     let mut state = self.tab_state(tab.tab_id());

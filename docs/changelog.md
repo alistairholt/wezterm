@@ -167,6 +167,9 @@ As features stabilize some brief notes about them will accumulate here.
 * Finder's Services menu gains "New WezTerm Window Here" and "New WezTerm
   Tab Here" for folders, like Terminal.app and iTerm2. The tab goes into
   the WezTerm window you used last.
+* [MoveTabToNewWindow](config/lua/keyassignment/MoveTabToNewWindow.md)
+  and [MergeAllWindows](config/lua/keyassignment/MergeAllWindows.md), in
+  the Window menu, as in Terminal.app and iTerm2.
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.

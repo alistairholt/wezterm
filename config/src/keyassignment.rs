@@ -567,6 +567,8 @@ pub enum KeyAssignment {
     ReloadConfiguration,
     MoveTabRelative(isize),
     MoveTab(usize),
+    MoveTabToNewWindow,
+    MergeAllWindows,
     ScrollByPage(NotNan<f64>),
     ScrollByLine(isize),
     ScrollByCurrentEventWheelDelta,

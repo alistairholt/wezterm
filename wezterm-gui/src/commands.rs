@@ -711,6 +711,24 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["View"],
             icon: Some("md_fullscreen"),
         },
+        MoveTabToNewWindow => CommandDef {
+            brief: "Move Tab to New Window".into(),
+            doc: "Moves the active tab out into a window of its own".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["Window"],
+            icon: Some("cod_multiple_windows"),
+        },
+        MergeAllWindows => CommandDef {
+            brief: "Merge All Windows".into(),
+            doc: "Moves the tabs of every other window in this workspace \
+                  into this window"
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["Window"],
+            icon: Some("cod_window"),
+        },
         ToggleAlwaysOnTop => CommandDef {
             brief: "Toggle always on Top".into(),
             doc: "Toggles the window between floating and non-floating states to stay on top of other windows.".into(),
@@ -2124,6 +2142,8 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ScrollToBottom,
         // ----------------- Window
         ToggleFullScreen,
+        MoveTabToNewWindow,
+        MergeAllWindows,
         ToggleAlwaysOnTop,
         ToggleAlwaysOnBottom,
         SetWindowLevel(WindowLevel::AlwaysOnBottom),
