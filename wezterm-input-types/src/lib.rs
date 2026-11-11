@@ -1863,11 +1863,11 @@ impl KeyEvent {
                 // from upper case letters, so look at the raw modifiers,
                 // and without them treat an upper case letter as shifted.
                 let shift_held = raw_modifiers.contains(Modifiers::SHIFT)
-                    || (self.raw.is_none() && shifted_key.is_ascii_uppercase());
+                    || (self.raw.is_none() && shifted_key.is_uppercase());
                 let c = if shift_held {
                     us_layout_unshift(shifted_key)
                 } else {
-                    shifted_key.to_ascii_lowercase()
+                    single_lowercase(shifted_key)
                 };
 
                 let base_layout = self
@@ -2138,6 +2138,15 @@ impl FromDynamic for IntegratedTitleButtonStyle {
     }
 }
 
+/// The lower case form of c, when that is a single character.
+fn single_lowercase(c: char) -> char {
+    let mut lower = c.to_lowercase();
+    match (lower.next(), lower.next()) {
+        (Some(l), None) => l,
+        _ => c,
+    }
+}
+
 /// Kitty wants us to report the un-shifted version of a key.
 /// It's a PITA to obtain that from the OS-dependent keyboard
 /// layout stuff. For the moment, we'll do the slightly gross
@@ -2166,14 +2175,7 @@ fn us_layout_unshift(c: char) -> char {
         '<' => ',',
         '>' => '.',
         '?' => '/',
-        c => {
-            let s: Vec<char> = c.to_lowercase().collect();
-            if s.len() == 1 {
-                s[0]
-            } else {
-                c
-            }
-        }
+        c => single_lowercase(c),
     }
 }
 
@@ -2287,6 +2289,21 @@ mod test {
             handled: Handled::new(),
         });
         assert_eq!(caps.encode_kitty(flags), "\x1b[97;1u");
+
+        // The same for a letter outside ASCII: caps lock on a Russian
+        // layout reports ф, not Ф.
+        let mut caps = key(KeyCode::Char('Ф'), Modifiers::NONE);
+        caps.raw = Some(RawKeyEvent {
+            key: KeyCode::Char('ф'),
+            modifiers: Modifiers::NONE,
+            leds: KeyboardLedStatus::empty(),
+            phys_code: Some(PhysKeyCode::A),
+            raw_code: 0,
+            repeat_count: 1,
+            key_is_down: true,
+            handled: Handled::new(),
+        });
+        assert_eq!(caps.encode_kitty(flags), "\x1b[1092::97;1u");
     }
 
     /// With "report all keys as escape codes" (flag 8), text keys must be
