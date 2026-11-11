@@ -3778,16 +3778,29 @@ impl TermWindow {
         ];
         args.extend(self.config.scrollback_pager.iter().cloned());
 
+        // The file is local, so the pager must run locally even when the
+        // pane belongs to an SSH or remote mux domain.
         self.spawn_command(
             &SpawnCommand {
                 args: Some(args),
                 cwd: pane
                     .get_current_working_dir(CachePolicy::AllowStale)
-                    .and_then(|url| url.to_file_path().ok()),
+                    .and_then(|url| url.to_file_path().ok())
+                    .filter(|path| path.is_dir()),
+                domain: config::keyassignment::SpawnTabDomain::DomainName("local".to_string()),
                 ..SpawnCommand::default()
             },
             SpawnWhere::NewTab,
         );
+
+        // The shell removes the file as soon as the pager has it open.
+        // If the spawn fails, nothing does, and the file holds the whole
+        // scrollback, so remove it here after a while either way.
+        promise::spawn::spawn(async move {
+            Timer::after(Duration::from_secs(30)).await;
+            std::fs::remove_file(&path).ok();
+        })
+        .detach();
         Ok(())
     }
 }

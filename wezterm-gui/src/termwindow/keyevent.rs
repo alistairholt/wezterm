@@ -193,6 +193,11 @@ impl super::TermWindow {
     /// when it is off, or when `pane` is an overlay such as copy mode.
     /// Panes showing their own overlay are skipped.
     pub fn broadcast_input_targets(&self, pane: &Arc<dyn Pane>) -> Vec<Arc<dyn Pane>> {
+        // Overlays such as copy mode and Quick Select report the id of
+        // the pane underneath them, so check for an overlay explicitly.
+        if self.pane_state(pane.pane_id()).overlay.is_some() {
+            return vec![];
+        }
         let mux = mux::Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
             Some(tab) => tab,
