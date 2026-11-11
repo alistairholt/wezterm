@@ -941,6 +941,17 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Edit"],
             icon: Some("md_content_copy"),
         },
+        SelectLastCommandOutput => CommandDef {
+            brief: "Select output of last command".into(),
+            doc: "Selects the output of the last command that printed \
+              something in the current pane, scrolling to it if needed. \
+              Needs shell integration."
+                .into(),
+            keys: vec![(Modifiers::SUPER.union(Modifiers::SHIFT), "a".into())],
+            args: &[ArgType::ActivePane],
+            menubar: &["Edit"],
+            icon: Some("md_select"),
+        },
         ShowLastCommandOutputInPager => CommandDef {
             brief: "Show last command output in pager".into(),
             doc: "Opens the output of the last command that printed \
@@ -2320,6 +2331,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ShowScrollbackInPager,
         ShowLastCommandOutputInPager,
         CopyLastCommandOutput,
+        SelectLastCommandOutput,
         QuickSelect,
         CharSelect(CharSelectArguments::default()),
         ActivateCopyMode,

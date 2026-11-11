@@ -16,11 +16,12 @@ default key binding. You can bind it like this:
 ```lua
 config.keys = {
   {
-    key = 'a',
-    mods = 'CMD|SHIFT',
+    key = 'c',
+    mods = 'CMD|ALT',
     action = wezterm.action.CopyLastCommandOutput,
   },
 }
 ```
 
-See also [ShowLastCommandOutputInPager](ShowLastCommandOutputInPager.md).
+See also [SelectLastCommandOutput](SelectLastCommandOutput.md) and
+[ShowLastCommandOutputInPager](ShowLastCommandOutputInPager.md).
