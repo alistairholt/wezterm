@@ -711,6 +711,16 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["View"],
             icon: Some("md_fullscreen"),
         },
+        ToggleMaximize => CommandDef {
+            brief: "Zoom".into(),
+            doc: "Switches the window between filling the screen and its \
+                  previous size, like the Zoom button"
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["Window"],
+            icon: Some("md_window_maximize"),
+        },
         MoveTabToNewWindow => CommandDef {
             brief: "Move Tab to New Window".into(),
             doc: "Moves the active tab out into a window of its own".into(),
@@ -2238,6 +2248,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ScrollToBottom,
         // ----------------- Window
         ToggleFullScreen,
+        ToggleMaximize,
         MoveTabToNewWindow,
         MovePaneToNewTab,
         MovePaneToNewWindow,
