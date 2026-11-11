@@ -221,6 +221,28 @@ impl crate::TermWindow {
             }
         }
 
+        // Like iTerm2's cursor guide: a bar behind the cursor's row. It is
+        // drawn after the pane background and before the lines, so text
+        // and cells with their own background color sit on top of it.
+        if let Some(color) = &config.cursor_guide_color {
+            let viewport_top = current_viewport.unwrap_or(dims.physical_top);
+            let row = cursor.y - viewport_top;
+            if pos.is_active
+                && cursor.visibility == termwiz::surface::CursorVisibility::Visible
+                && row >= 0
+                && (row as usize) < pos.height
+            {
+                let rect = euclid::rect(
+                    background_rect.origin.x,
+                    top_pixel_y + (pos.top as f32 + row as f32) * cell_height,
+                    background_rect.size.width,
+                    cell_height,
+                );
+                self.filled_rectangle(layers, 0, rect, color.to_linear())
+                    .context("filled_rectangle")?;
+            }
+        }
+
         // TODO: we only have a single scrollbar in a single position.
         // We only update it for the active pane, but we should probably
         // do a per-pane scrollbar.  That will require more extensive

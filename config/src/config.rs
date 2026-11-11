@@ -906,6 +906,11 @@ pub struct Config {
     #[dynamic(default)]
     pub macos_secure_keyboard_entry: bool,
 
+    /// Draw a bar of this color behind the cursor's row in the active
+    /// pane, like iTerm2's cursor guide.
+    #[dynamic(default)]
+    pub cursor_guide_color: Option<RgbaColor>,
+
     /// A system-wide hotkey that shows and hides WezTerm.
     #[dynamic(default)]
     pub macos_global_hotkey: Option<KeyNoAction>,
