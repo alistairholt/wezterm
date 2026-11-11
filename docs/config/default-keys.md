@@ -21,6 +21,7 @@ in a form that you can copy and paste into your own configuration.
 |      | `Paste`   | `PasteFrom="Clipboard"`  |
 | `CTRL`     | `Insert` | `CopyTo="PrimarySelection"` {{since('20210203-095643-70a364eb', inline=True)}} |
 | `SHIFT`     | `Insert` | `PasteFrom="PrimarySelection"` |
+| `SUPER`     | `a`      | `SelectAll` {{since('nightly', inline=True)}} |
 | `SUPER`     | `m`      | `Hide`  |
 | `SUPER`     | `n`      | `SpawnWindow` |
 | `CTRL+SHIFT`     | `n`      | `SpawnWindow` |

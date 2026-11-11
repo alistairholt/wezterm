@@ -703,6 +703,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Edit"],
             icon: Some("md_content_paste"),
         },
+        SelectAll => CommandDef {
+            brief: "Select All".into(),
+            doc: "Selects everything in the scrollback and on screen".into(),
+            keys: vec![(Modifiers::SUPER, "a".into())],
+            args: &[ArgType::ActivePane],
+            menubar: &["Edit"],
+            icon: Some("md_select_all"),
+        },
         ToggleFullScreen => CommandDef {
             brief: "Toggle full screen mode".into(),
             doc: "Switch between normal and full screen mode".into(),
@@ -2226,6 +2234,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         // ----------------- Edit
         CopyTo(ClipboardCopyDestination::Clipboard),
         PasteFrom(ClipboardPasteSource::Clipboard),
+        SelectAll,
         ClearScrollback(ScrollbackEraseMode::ScrollbackOnly),
         ClearScrollback(ScrollbackEraseMode::ScrollbackAndViewport),
         ShowScrollbackInPager,

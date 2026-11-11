@@ -240,6 +240,32 @@ impl super::TermWindow {
         self.window.as_ref().unwrap().invalidate();
     }
 
+    /// Select everything in the scrollback and on screen, like iTerm's
+    /// Select All. Blank rows at the bottom of the screen are left out,
+    /// so copying the selection doesn't end in a run of empty lines.
+    pub fn select_all(&mut self, pane: &Arc<dyn Pane>) {
+        let dims = pane.get_dimensions();
+        let bottom = dims.physical_top + dims.viewport_rows as StableRowIndex;
+        let (first, lines) = pane.get_lines(dims.physical_top..bottom);
+        let last_row = lines
+            .iter()
+            .rposition(|line| !line.is_whitespace())
+            .map(|idx| first + idx as StableRowIndex)
+            .unwrap_or((dims.physical_top - 1).max(dims.scrollback_top));
+
+        let start = SelectionCoordinate::x_y(0, dims.scrollback_top);
+        let mut selection = self.selection(pane.pane_id());
+        selection.origin = Some(start);
+        selection.range = Some(SelectionRange {
+            start,
+            end: SelectionCoordinate::x_y(usize::MAX, last_row),
+        });
+        selection.rectangular = false;
+        selection.seqno = pane.get_current_seqno();
+        drop(selection);
+        self.window.as_ref().unwrap().invalidate();
+    }
+
     pub fn select_text_at_mouse_cursor(&mut self, mode: SelectionMode, pane: &Arc<dyn Pane>) {
         let (x, y) = match self.pane_state(pane.pane_id()).mouse_terminal_coords {
             Some(coords) => (coords.0.column, coords.1),
