@@ -2885,6 +2885,7 @@ impl TermWindow {
                     log::error!("ShowLastCommandOutputInPager: {err:#}");
                 }
             }
+            SaveScrollbackToFile => self.save_scrollback_to_file(pane),
             NotifyWhenCommandFinishes => {
                 let state = &mut self.pane_state(pane.pane_id()).notify_on_next_finish;
                 *state = !*state;
@@ -3825,6 +3826,47 @@ impl TermWindow {
     /// for colors and attributes, to a private temporary file and open
     /// it with `scrollback_pager` in a new tab, as the pager's standard
     /// input. The file is removed as soon as the pager has it open.
+    /// Like iTerm2's Save Contents: ask where to save, then write the
+    /// pane's scrollback and screen there as plain text.
+    fn save_scrollback_to_file(&mut self, pane: &Arc<dyn Pane>) {
+        let dims = pane.get_dimensions();
+        let end = dims.physical_top + dims.viewport_rows as StableRowIndex;
+        let (_first, lines) = pane.get_lines(dims.scrollback_top..end);
+        let mut text = lines
+            .iter()
+            .map(|line| line.as_str().trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        text.truncate(text.trim_end().len());
+        text.push('\n');
+
+        let name = format!(
+            "WezTerm {}.txt",
+            chrono::Local::now().format("%Y-%m-%d at %H.%M.%S")
+        );
+        // Show the panel from its own task: AppKit calls back into the
+        // window while it attaches the sheet, and the window's state is
+        // still borrowed while this action runs.
+        promise::spawn::spawn(async move {
+            ::window::os::macos::save_panel::choose_save_path(&name, move |path| {
+                let Some(path) = path else {
+                    return;
+                };
+                match std::fs::write(&path, &text) {
+                    Ok(()) => log::info!("Saved scrollback to {}", path.display()),
+                    Err(err) => {
+                        log::error!("Failed to save scrollback to {}: {err:#}", path.display());
+                        wezterm_toast_notification::persistent_toast_notification(
+                            "Couldn't save contents",
+                            &format!("{}: {err}", path.display()),
+                        );
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
     fn show_scrollback_in_pager(&mut self, pane: &Arc<dyn Pane>) -> anyhow::Result<()> {
         let dims = pane.get_dimensions();
         let end = dims.physical_top + dims.viewport_rows as StableRowIndex;
