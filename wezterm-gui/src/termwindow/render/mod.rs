@@ -860,7 +860,8 @@ impl crate::TermWindow {
                 }
             }
         };
-        metrics::histogram!("cached_cluster_shape").record(shape_resolve_start.elapsed());
+        crate::stats::cached_histogram!("cached_cluster_shape")
+            .record(shape_resolve_start.elapsed());
         log::trace!(
             "shape_resolve for cluster len {} -> elapsed {:?}",
             cluster.text.len(),

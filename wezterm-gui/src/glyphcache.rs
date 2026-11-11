@@ -647,10 +647,10 @@ impl GlyphCache {
         };
 
         if let Some(entry) = self.glyph_cache.get(&key as &dyn GlyphKeyTrait) {
-            metrics::histogram!("glyph_cache.glyph_cache.hit.rate").record(1.);
+            crate::stats::cached_histogram!("glyph_cache.glyph_cache.hit.rate").record(1.);
             return Ok(Rc::clone(entry));
         }
-        metrics::histogram!("glyph_cache.glyph_cache.miss.rate").record(1.);
+        crate::stats::cached_histogram!("glyph_cache.glyph_cache.miss.rate").record(1.);
 
         let glyph = match self.load_glyph(info, font, followed_by_space, num_cells) {
             Ok(g) => g,
