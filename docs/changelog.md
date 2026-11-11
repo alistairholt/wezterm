@@ -50,6 +50,10 @@ As features stabilize some brief notes about them will accumulate here.
 * Working out whether a cell should be drawn as an emoji now skips the
   emoji tables for plain ASCII cells, saving about 10ms of main thread CPU
   per second when a full-screen program redraws.
+* Lines drawn from the line quad cache are now written straight into the
+  GPU vertex buffer instead of being built on the stack and copied in,
+  saving about 15ms of main thread CPU per second when a full-screen
+  program redraws.
 * macOS: painting is paced by the window's display link instead of a
   [max_fps](config/lua/config/max_fps.md) timer. Frames now follow the
   display's refresh, up to `max_fps`, which now defaults to `120` (was
