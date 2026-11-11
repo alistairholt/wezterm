@@ -349,6 +349,7 @@ impl WebGpuState {
         // pixel format matches it, so blending and colors are unchanged.
         let format = wgpu::TextureFormat::Bgra8UnormSrgb;
         let presenter = unsafe { MetalPresenter::new(layer, &device, format)? };
+        presenter.set_colorspace(config.macos_colorspace);
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("../shader.wgsl"));
 
