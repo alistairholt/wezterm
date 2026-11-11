@@ -173,6 +173,9 @@ As features stabilize some brief notes about them will accumulate here.
 * [ShowLastCommandOutputInPager](config/lua/keyassignment/ShowLastCommandOutputInPager.md)
   opens the last command's output in a pager in a new tab, as kitty's
   `show_last_non_empty_command_output` does. Needs shell integration.
+* [CloseOtherTabs](config/lua/keyassignment/CloseOtherTabs.md) closes
+  every tab in the window except the active one, asking once if any of
+  them would prompt, like iTerm's Close Other Tabs.
 * [SelectAll](config/lua/keyassignment/SelectAll.md), bound to
   `CMD-a` and in the Edit menu, selects the whole scrollback and screen,
   as iTerm's Select All does.
