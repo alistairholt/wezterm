@@ -2970,6 +2970,10 @@ impl TermWindow {
                 }
                 Err(err) => log::error!("CopyLastCommandOutput: {err:#}"),
             },
+            SelectLastCommandOutput => match last_command_output_zone(pane) {
+                Ok((zone, lines)) => self.select_command_output(pane, &zone, &lines),
+                Err(err) => log::error!("SelectLastCommandOutput: {err:#}"),
+            },
             ToggleAppVisibility => {
                 ::window::os::macos::global_hotkey::toggle_app_visibility();
             }
@@ -4300,6 +4304,14 @@ impl TermWindow {
 /// text. The shell integration marks command output with OSC 133, so
 /// this leaves out the prompt and the command line.
 fn last_command_output(pane: &Arc<dyn Pane>) -> anyhow::Result<Vec<wezterm_term::Line>> {
+    last_command_output_zone(pane).map(|(_zone, lines)| lines)
+}
+
+/// Like `last_command_output`, but also returns the zone, so callers
+/// know where the output sits in the scrollback.
+fn last_command_output_zone(
+    pane: &Arc<dyn Pane>,
+) -> anyhow::Result<(wezterm_term::SemanticZone, Vec<wezterm_term::Line>)> {
     let zones = pane.get_semantic_zones()?;
     for zone in zones.iter().rev() {
         if zone.semantic_type != wezterm_term::SemanticType::Output {
@@ -4309,7 +4321,7 @@ fn last_command_output(pane: &Arc<dyn Pane>) -> anyhow::Result<Vec<wezterm_term:
         if lines.iter().all(|line| line.as_str().trim().is_empty()) {
             continue;
         }
-        return Ok(lines);
+        return Ok((*zone, lines));
     }
     anyhow::bail!(
         "no command output found in pane {}; is shell integration set up?",

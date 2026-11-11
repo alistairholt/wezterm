@@ -588,6 +588,7 @@ pub enum KeyAssignment {
     ShowScrollbackInPager,
     ShowLastCommandOutputInPager,
     CopyLastCommandOutput,
+    SelectLastCommandOutput,
     NotifyWhenCommandFinishes,
     SaveScrollbackToFile,
     ToggleWindowOpacity,
