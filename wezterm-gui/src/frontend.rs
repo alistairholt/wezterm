@@ -304,10 +304,9 @@ impl GuiFrontEnd {
                 .detach();
             }
             ApplicationEvent::PerformKeyAssignment(action) => {
-                // We should only get here when there are no windows open
-                // and the user picks an action from the menubar.
-                // This is not currently possible, but could be in the
-                // future.
+                // We get here when there is no window to perform the
+                // action in: a menubar action with no windows open, or a
+                // Services menu item (New WezTerm Tab/Window Here).
 
                 fn spawn_command(spawn: &SpawnCommand, spawn_where: SpawnWhere) {
                     let config = config::configuration();
@@ -316,7 +315,22 @@ impl GuiFrontEnd {
                         config.initial_size(dpi as u32, crate::cell_pixel_dims(&config, dpi).ok());
                     let term_config = Arc::new(config::TermConfig::with_config(config));
 
-                    crate::spawn::spawn_command_impl(spawn, spawn_where, size, None, term_config)
+                    // A new tab goes into the window you last used, if any.
+                    let src_window_id = match spawn_where {
+                        SpawnWhere::NewTab => try_front_end().and_then(|fe| {
+                            Mux::get()
+                                .resolve_focused_pane(&fe.client_id)
+                                .map(|(_domain, window_id, _tab, _pane)| window_id)
+                        }),
+                        _ => None,
+                    };
+                    crate::spawn::spawn_command_impl(
+                        spawn,
+                        spawn_where,
+                        size,
+                        src_window_id,
+                        term_config,
+                    )
                 }
 
                 match action {

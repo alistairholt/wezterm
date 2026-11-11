@@ -81,6 +81,10 @@ extern "C" fn application_did_finish_launching(this: &mut Object, _sel: Sel, _no
     unsafe {
         (*this).set_ivar("launched", YES);
     }
+    // Handle the Services menu items declared in Info.plist (NSServices).
+    unsafe {
+        let _: () = msg_send![cocoa::appkit::NSApp(), setServicesProvider: this as *mut Object];
+    }
     let pending = PENDING_OPEN_FILES.with(|files| std::mem::take(&mut *files.borrow_mut()));
     if let Some(conn) = Connection::get() {
         for file_name in pending {
@@ -163,6 +167,77 @@ extern "C" fn application_did_change_active(_this: &mut Object, _sel: Sel, _noti
     super::secure_input::sync();
 }
 
+/// The folders in a Services pasteboard. A file stands for the folder
+/// that holds it.
+fn service_folders(pasteboard: *mut Object) -> Vec<String> {
+    let mut folders = vec![];
+    unsafe {
+        let classes: id = msg_send![class!(NSArray), arrayWithObject: class!(NSURL)];
+        let key = nsstring("NSPasteboardURLReadingFileURLsOnlyKey");
+        let yes: id = msg_send![class!(NSNumber), numberWithBool: YES];
+        let options: id = msg_send![class!(NSDictionary), dictionaryWithObject: yes forKey: *key];
+        let urls: id = msg_send![pasteboard, readObjectsForClasses: classes options: options];
+        if urls.is_null() {
+            return folders;
+        }
+        let count: usize = msg_send![urls, count];
+        for idx in 0..count {
+            let url: id = msg_send![urls, objectAtIndex: idx];
+            let path: id = msg_send![url, path];
+            if path.is_null() {
+                continue;
+            }
+            let path = std::path::PathBuf::from(nsstring_to_str(path));
+            let folder = if path.is_dir() {
+                Some(path)
+            } else {
+                path.parent().map(|p| p.to_path_buf())
+            };
+            if let Some(folder) = folder.and_then(|f| f.to_str().map(str::to_string)) {
+                folders.push(folder);
+            }
+        }
+    }
+    folders
+}
+
+/// Services menu: "New WezTerm Window Here".
+extern "C" fn service_open_window(
+    _this: &mut Object,
+    _sel: Sel,
+    pasteboard: *mut Object,
+    _user_data: *mut Object,
+    _error: *mut std::ffi::c_void,
+) {
+    if let Some(conn) = Connection::get() {
+        for folder in service_folders(pasteboard) {
+            log::debug!("service: new window in {folder}");
+            conn.dispatch_app_event(ApplicationEvent::OpenCommandScript(folder));
+        }
+    }
+}
+
+/// Services menu: "New WezTerm Tab Here".
+extern "C" fn service_open_tab(
+    _this: &mut Object,
+    _sel: Sel,
+    pasteboard: *mut Object,
+    _user_data: *mut Object,
+    _error: *mut std::ffi::c_void,
+) {
+    if let Some(conn) = Connection::get() {
+        for folder in service_folders(pasteboard) {
+            log::debug!("service: new tab in {folder}");
+            conn.dispatch_app_event(ApplicationEvent::PerformKeyAssignment(
+                KeyAssignment::SpawnCommandInNewTab(config::keyassignment::SpawnCommand {
+                    cwd: Some(folder.into()),
+                    ..Default::default()
+                }),
+            ));
+        }
+    }
+}
+
 fn get_class() -> &'static Class {
     Class::get(CLS_NAME).unwrap_or_else(|| {
         let mut cls = ClassDecl::new(CLS_NAME, class!(NSObject))
@@ -203,6 +278,28 @@ fn get_class() -> &'static Class {
             cls.add_method(
                 sel!(weztermPerformKeyAssignment:),
                 wezterm_perform_key_assignment as extern "C" fn(&mut Object, Sel, *mut Object),
+            );
+            cls.add_method(
+                sel!(weztermServiceOpenWindow:userData:error:),
+                service_open_window
+                    as extern "C" fn(
+                        &mut Object,
+                        Sel,
+                        *mut Object,
+                        *mut Object,
+                        *mut std::ffi::c_void,
+                    ),
+            );
+            cls.add_method(
+                sel!(weztermServiceOpenTab:userData:error:),
+                service_open_tab
+                    as extern "C" fn(
+                        &mut Object,
+                        Sel,
+                        *mut Object,
+                        *mut Object,
+                        *mut std::ffi::c_void,
+                    ),
             );
             cls.add_method(
                 sel!(applicationOpenUntitledFile:),
