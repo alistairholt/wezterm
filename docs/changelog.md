@@ -25,6 +25,11 @@ As features stabilize some brief notes about them will accumulate here.
 * This fork is now macOS-only. Windows, X11 and Wayland support, WSL
   domains, the fontconfig and GDI font locators, and the Linux and Windows
   packages and CI builds have been removed.
+* `update-status`, `update-right-status` and other window events that aren't
+  tied to a pane now get the tab's real pane, not a launcher or confirmation
+  overlay that is open on top of it. Events whose pane has gone by the time
+  they run are skipped, which stops "pane id N not found in mux" errors when
+  an overlay closes or on quit.
 * fonts: Default dim/bold text now looks more contrasting, see #8049 for examples.
   Thanks to @bfoersterling (testing) & @hphng for his first OSS contribution! #8097
 * DECRQCRA is now disabled by default to prevent silent screen scraping.

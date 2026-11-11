@@ -1571,9 +1571,13 @@ impl TermWindow {
             Some(pane_id) => Mux::get().get_pane(pane_id),
             None => None,
         };
+        // With no pane given, use the real pane, not a launcher or confirmation
+        // overlay: the overlay is short-lived (its pane is removed when it
+        // closes, racing the event) and its process and cwd mean nothing to a
+        // status handler.
         let pane = match pane {
             Some(pane) => pane,
-            None => match self.get_active_pane_or_overlay() {
+            None => match self.get_active_pane_no_overlay() {
                 Some(pane) => pane,
                 None => return,
             },
@@ -1587,7 +1591,17 @@ impl TermWindow {
             window: GuiWin,
             pane: MuxPane,
         ) -> anyhow::Result<()> {
-            let again = if let Some(lua) = lua {
+            // The event runs after a hop to the main thread. By then the pane
+            // may be gone, for example when the app is quitting, and handlers
+            // that call pane methods would fail with "pane id N not found".
+            // Skip the call; there's nothing left to update.
+            let pane_exists = Mux::try_get()
+                .map(|mux| mux.get_pane(pane.0).is_some())
+                .unwrap_or(false);
+            let again = if !pane_exists {
+                log::debug!("skipping {} event: pane {} no longer exists", name, pane.0);
+                false
+            } else if let Some(lua) = lua {
                 let args = lua.pack_multi((window.clone(), pane))?;
 
                 if let Err(err) = config::lua::emit_event(&lua, (name.clone(), args)).await {
