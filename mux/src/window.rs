@@ -119,6 +119,23 @@ impl Window {
         self.invalidate();
     }
 
+    /// Insert `tab` at `index` and make it the active tab. The tab that
+    /// was active becomes the "last active" tab. Unlike calling
+    /// `insert_tab_at_idx` then `remember_and_set_active_tab_idx`, this
+    /// doesn't read `active_tab_idx` after the insert has shifted it.
+    pub fn insert_tab_and_activate(&mut self, index: usize, tab: &Arc<Tab>) {
+        let previous = self.get_active_tab().map(Arc::clone);
+        self.insert_tab_at_idx(index, tab);
+        if let Some(previous) = previous {
+            self.last_active_tab_id = Some(previous.tab_id());
+            if let Some(pane) = previous.get_active_pane() {
+                pane.focus_changed(false);
+            }
+        }
+        self.active_tab_idx = index;
+        self.invalidate();
+    }
+
     /// Insert `tab` in window, after other tabs.
     pub fn push_tab(&mut self, tab: &Arc<Tab>) {
         self.assert_tab_isnt_already_in_window(tab);
@@ -196,14 +213,20 @@ impl Window {
     }
 
     /// Remove tab at given index, switching to previous active tab if needed.
-    fn do_remove_tab_idx(&mut self, idx: usize, active: Option<Arc<Tab>>) -> Arc<Tab> {
-        if let (Some(active), Some(removing)) = (&active, self.tabs.get(idx)) {
-            if active.tab_id() == removing.tab_id()
+    fn do_remove_tab_idx(&mut self, idx: usize, mut active: Option<Arc<Tab>>) -> Arc<Tab> {
+        if let (Some(current), Some(removing)) = (&active, self.tabs.get(idx)) {
+            if current.tab_id() == removing.tab_id()
                 && config::configuration().switch_to_last_active_tab_when_closing_tab
             {
-                // If we are removing active tab, switch back to previously active tab
+                // If we are removing active tab, switch back to previously
+                // active tab. Pass the tab itself, not its index, on to
+                // fixup_active_tab_after_removal: the index shifts down by
+                // one when the removed tab is to its left.
                 if let Some(last_active) = self.get_last_active_tab_idx() {
-                    self.set_active_tab_idx_without_saving(last_active);
+                    if let Some(pane) = removing.get_active_pane() {
+                        pane.focus_changed(false);
+                    }
+                    active = Some(Arc::clone(&self.tabs[last_active]));
                 }
             }
         }

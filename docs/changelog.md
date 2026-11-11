@@ -330,6 +330,10 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* With
+  [switch_to_last_active_tab_when_closing_tab](config/lua/config/switch_to_last_active_tab_when_closing_tab.md),
+  closing a tab to the left of the previously active tab activated the
+  tab after it instead.
 * Making the window wider moved a cursor at the start of a line (for
   example, a fresh prompt line) to the end of the line above. It now
   stays put.
