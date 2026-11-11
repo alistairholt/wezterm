@@ -3,6 +3,7 @@
 use super::*;
 use crate::hyperlink::{Hyperlink, Rule};
 use crate::line::clusterline::ClusteredLine;
+use crate::line::storage::CellStorage;
 use crate::SEQ_ZERO;
 use alloc::sync::Arc;
 use k9::assert_equal as assert_eq;
@@ -97,6 +98,50 @@ fn hyperlinks() {
             Cell::new('m', hyperlink_attr.clone()),
         ]
     );
+}
+
+/// A logical line made of one physical line is scanned in place rather
+/// than through a cloned logical line. Check it finds the same links as
+/// scanning the line directly, keeps compressed storage compressed, and
+/// leaves an already scanned line alone.
+#[test]
+fn apply_hyperlink_rules_single_line() {
+    let rules = vec![Rule::new(r"\b\w+://(?:[\w.-]+)\.[a-z]{2,15}\S*\b", "$0").unwrap()];
+    let text = "see http://example.com here";
+
+    let mut expected: Line = text.into();
+    expected.scan_and_create_hyperlinks(&rules);
+
+    let mut line: Line = text.into();
+    let seqno = line.current_seqno();
+    Line::apply_hyperlink_rules(&rules, &mut [&mut line]);
+    assert!(line.has_hyperlink());
+    assert_eq!(line.current_seqno(), seqno);
+    assert_eq!(
+        line.coerce_vec_storage().to_vec(),
+        expected.coerce_vec_storage().to_vec()
+    );
+
+    // Compressed (scrollback) storage is compressed again after the
+    // links are added.
+    let mut compressed: Line = text.into();
+    compressed.compress_for_scrollback();
+    Line::apply_hyperlink_rules(&rules, &mut [&mut compressed]);
+    assert!(compressed.has_hyperlink());
+    assert!(matches!(compressed.cells, CellStorage::C(_)));
+    assert_eq!(
+        compressed.coerce_vec_storage().to_vec(),
+        expected.coerce_vec_storage().to_vec()
+    );
+
+    // A line that was already scanned isn't scanned again, even with
+    // different rules; the caller must invalidate it first.
+    let mut plain: Line = "nothing to see".into();
+    Line::apply_hyperlink_rules(&rules, &mut [&mut plain]);
+    assert!(!plain.has_hyperlink());
+    let word_rule = vec![Rule::new(r"\bnothing\b", "https://example.com").unwrap()];
+    Line::apply_hyperlink_rules(&word_rule, &mut [&mut plain]);
+    assert!(!plain.has_hyperlink());
 }
 
 #[test]

@@ -40,6 +40,10 @@ As features stabilize some brief notes about them will accumulate here.
 * Internal performance counters (cache hit rates and timings) no longer
   read the clock or look up their handle on every cache lookup, saving
   about 12ms of main thread CPU per second while output scrolls.
+* Checking a changed line for [hyperlink rules](config/lua/config/hyperlink_rules.md)
+  no longer copies the line first when it fits on one row, cutting that
+  check from about 35ms to 4ms of main thread CPU per second when a
+  full-screen program redraws.
 * macOS: during a live window resize, each step now waits briefly (up to
   [macos_live_resize_repaint_wait_ms](config/lua/config/macos_live_resize_repaint_wait_ms.md),
   default 8ms) for full-screen programs in the active tab to redraw at the
