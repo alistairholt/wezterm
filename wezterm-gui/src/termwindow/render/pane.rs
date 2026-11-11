@@ -1,4 +1,4 @@
-use crate::quad::{HeapQuadAllocator, QuadTrait, TripleLayerQuadAllocator};
+use crate::quad::{QuadTrait, TripleLayerQuadAllocator};
 use crate::selection::SelectionRange;
 use crate::termwindow::box_model::*;
 use crate::termwindow::render::{
@@ -467,7 +467,8 @@ impl crate::TermWindow {
                         }
                     }
 
-                    let mut buf = HeapQuadAllocator::default();
+                    let mut buf = self.term_window.line_quad_scratch.take();
+                    buf.clear();
                     let next_due = self.term_window.has_animation.borrow_mut().take();
 
                     let shape_key = LineToEleShapeCacheKey {
@@ -534,8 +535,11 @@ impl crate::TermWindow {
                     buf.apply_to(self.layers)
                         .context("HeapQuadAllocator::apply_to")?;
 
+                    let layers = buf.to_compact();
+                    self.term_window.line_quad_scratch.replace(buf);
+
                     let quad_value = LineQuadCacheValue {
-                        layers: buf,
+                        layers,
                         expires,
                         invalidate_on_hover_change: render_result.invalidate_on_hover_change,
                         current_highlight: if render_result.invalidate_on_hover_change {

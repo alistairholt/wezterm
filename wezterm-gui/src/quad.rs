@@ -219,7 +219,7 @@ pub trait TripleLayerQuadAllocatorTrait {
 
 /// The compact form of a quad that HeapQuadAllocator keeps for the line
 /// quad cache: 84 bytes instead of the 272 bytes of its four vertices.
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct BoxedQuad {
     position: (f32, f32, f32, f32),
     fg_color: [f32; 4],
@@ -310,8 +310,11 @@ impl BoxedQuad {
 /// Each layer is one flat Vec. Quads used to be boxed one at a time,
 /// which cost a malloc per glyph when a line was drawn and a free per
 /// glyph when its cache entry was replaced: about 0.3ms per frame while
-/// output scrolls. A line holds at most a few thousand quads (a few
-/// hundred KB at most), so growing the Vec is cheap.
+/// output scrolls.
+///
+/// A line is built into a scratch allocator that the caller reuses, so
+/// its Vecs don't grow (and reallocate) from empty for every line, and
+/// then `to_compact` copies it once into exact-size Vecs for the cache.
 #[derive(Default)]
 pub struct HeapQuadAllocator {
     layer0: Vec<BoxedQuad>,
@@ -326,6 +329,22 @@ impl std::fmt::Debug for HeapQuadAllocator {
 }
 
 impl HeapQuadAllocator {
+    /// Empties every layer, keeping the allocated capacity.
+    pub fn clear(&mut self) {
+        self.layer0.clear();
+        self.layer1.clear();
+        self.layer2.clear();
+    }
+
+    /// Returns a copy with no spare capacity, to keep in a cache.
+    pub fn to_compact(&self) -> Self {
+        Self {
+            layer0: self.layer0.to_vec(),
+            layer1: self.layer1.to_vec(),
+            layer2: self.layer2.to_vec(),
+        }
+    }
+
     pub fn apply_to(&self, other: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
         let start = std::time::Instant::now();
         for (layer_num, quads) in [(0, &self.layer0), (1, &self.layer1), (2, &self.layer2)] {
