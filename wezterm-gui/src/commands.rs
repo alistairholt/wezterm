@@ -1198,6 +1198,23 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Window", "Select Tab"],
             icon: None,
         },
+        MovePaneToTab(n) => {
+            let n = *n;
+            let which = if n < 0 {
+                "right-most".to_string()
+            } else {
+                english_ordinal(n + 1)
+            };
+            CommandDef {
+                brief: format!("Move Pane to {which} Tab").into(),
+                doc: format!("Moves the active pane into the {which} tab, beside its active pane")
+                    .into(),
+                keys: vec![],
+                args: &[ArgType::ActivePane],
+                menubar: &[],
+                icon: Some("cod_split_horizontal"),
+            }
+        }
         ActivateTab(n) => {
             let n = *n;
             let ordinal = english_ordinal(n + 1);
