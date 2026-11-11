@@ -616,6 +616,7 @@ pub enum KeyAssignment {
     CompleteSelectionOrOpenLinkAtMouseCursor(ClipboardCopyDestination),
     StartWindowDrag,
 
+    BalancePanes,
     AdjustPaneSize(PaneDirection, usize),
     ActivatePaneDirection(PaneDirection),
     ActivatePaneByIndex(usize),
