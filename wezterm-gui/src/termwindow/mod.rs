@@ -2776,6 +2776,11 @@ impl TermWindow {
                 let con = Connection::get().expect("call on gui thread");
                 con.hide_application();
             }
+            ToggleSecureKeyboardEntry => {
+                use ::window::os::macos::secure_input;
+                secure_input::set_secure_keyboard_entry(!secure_input::secure_keyboard_entry());
+                crate::commands::CommandDef::update_secure_keyboard_entry_menu_state();
+            }
             QuitApplication => {
                 let mux = Mux::get();
                 let config = &self.config;

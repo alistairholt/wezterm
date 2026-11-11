@@ -555,6 +555,9 @@ impl CommandDef {
                     item.set_key_equiv_modifier_mask(equiv_mods);
                 }
 
+                if cmd.action == KeyAssignment::ToggleSecureKeyboardEntry {
+                    item.set_state(window::os::macos::secure_input::secure_keyboard_entry());
+                }
                 item.set_represented_item(represented_item);
                 item.set_tool_tip(&cmd.doc);
                 // Update the tag to indicate that this item should
@@ -568,6 +571,37 @@ impl CommandDef {
             if item.get_tag() == 0 {
                 item.get_menu().map(|menu| menu.remove_item(&item));
             }
+        }
+    }
+
+    /// Show whether Secure Keyboard Entry is on with a checkmark on its
+    /// menu item.
+    pub fn update_secure_keyboard_entry_menu_state() {
+        use window::os::macos::menu::*;
+        let Some(main_menu) = Menu::get_main_menu() else {
+            return;
+        };
+        let Some(app_item) = main_menu.item_with_title("WezTerm") else {
+            return;
+        };
+        let Some(app_menu) = app_item.get_sub_menu() else {
+            return;
+        };
+        let represented = RepresentedItem::KeyAssignment(KeyAssignment::ToggleSecureKeyboardEntry);
+        if let Some(item) = app_menu.get_item_with_represented_item(&represented) {
+            item.set_state(window::os::macos::secure_input::secure_keyboard_entry());
+        }
+    }
+
+    /// Apply `macos_secure_keyboard_entry` when it changes, so that a
+    /// config reload doesn't undo a toggle made from the menu.
+    pub fn apply_secure_keyboard_entry_config(config: &ConfigHandle) {
+        thread_local! {
+            static LAST: std::cell::Cell<Option<bool>> = std::cell::Cell::new(None);
+        }
+        let wanted = config.macos_secure_keyboard_entry;
+        if LAST.with(|last| last.replace(Some(wanted))) != Some(wanted) {
+            window::os::macos::secure_input::set_secure_keyboard_entry(wanted);
         }
     }
 }
@@ -743,6 +777,17 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             args: &[],
             menubar: &["WezTerm"],
             icon: None,
+        },
+        ToggleSecureKeyboardEntry => CommandDef {
+            brief: "Secure Keyboard Entry".into(),
+            doc: "Toggles Secure Keyboard Entry, which stops other apps \
+              from reading what you type while WezTerm is active. \
+              This is macOS specific."
+                .into(),
+            keys: vec![],
+            args: &[],
+            menubar: &["WezTerm"],
+            icon: Some("md_shield_lock"),
         },
         SpawnWindow => CommandDef {
             brief: "New Window".into(),
@@ -2017,6 +2062,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
     return vec![
         // ----------------- WezTerm
         ReloadConfiguration,
+        ToggleSecureKeyboardEntry,
         HideApplication,
         QuitApplication,
         // ----------------- Shell

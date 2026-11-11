@@ -139,6 +139,11 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* macOS: Secure Keyboard Entry, as in Terminal.app and iTerm2. Turn it on
+  from the WezTerm menu, with
+  [ToggleSecureKeyboardEntry](config/lua/keyassignment/ToggleSecureKeyboardEntry.md),
+  or at startup with
+  [macos_secure_keyboard_entry](config/lua/config/macos_secure_keyboard_entry.md).
 * [window_alert_on_bell](config/lua/config/window_alert_on_bell.md)
   bounces the Dock icon when a bell rings while WezTerm is in the
   background, as kitty does. On by default.
