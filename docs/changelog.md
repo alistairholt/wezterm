@@ -161,6 +161,9 @@ As features stabilize some brief notes about them will accumulate here.
 * [ToggleBroadcastInput](config/lua/keyassignment/ToggleBroadcastInput.md)
   sends what you type to every pane in the current tab, like iTerm2's
   Broadcast Input. The tab's title shows 📢 while it is on.
+* [confirm_multiline_paste](config/lua/config/confirm_multiline_paste.md)
+  asks before pasting text with a line break into a program that hasn't
+  turned on bracketed paste, like kitty and iTerm2. On by default.
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.
