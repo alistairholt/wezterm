@@ -22,6 +22,15 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* The default [hyperlink_rules](config/lua/config/hyperlink_rules.md) no
+  longer use `\b` or a lookahead, so they run in the fast regex engine
+  instead of the backtracking one. They find the same links, and scanning
+  changed lines for links takes far less time per frame while output
+  scrolls. If you copied the old defaults into your config, consider
+  updating them from `wezterm.default_hyperlink_rules()`.
+* macOS: with `front_end = "WebGpu"`, drawing a frame takes about 0.15ms
+  instead of about 1ms of CPU: vertices are written straight into memory
+  the GPU reads, and the whole frame is drawn in one render pass.
 * macOS: during a live window resize, each step now waits briefly (up to
   [macos_live_resize_repaint_wait_ms](config/lua/config/macos_live_resize_repaint_wait_ms.md),
   default 8ms) for full-screen programs in the active tab to redraw at the

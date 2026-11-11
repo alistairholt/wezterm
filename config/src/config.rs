@@ -20,11 +20,11 @@ use crate::tls::{TlsDomainClient, TlsDomainServer};
 use crate::units::Dimension;
 use crate::unix::UnixDomain;
 use crate::{
-    default_config_with_overrides_applied, default_one_point_oh, default_one_point_oh_f64,
-    default_true, default_win32_acrylic_accent_color, CellWidth, GpuInfo,
+    CONFIG_DIRS, CONFIG_FILE_OVERRIDE, CONFIG_OVERRIDES, CONFIG_SKIP, CellWidth, GpuInfo, HOME_DIR,
     IntegratedTitleButtonColor, KeyMapPreference, LoadedConfig, MouseEventTriggerMods, RgbaColor,
-    SerialDomain, SystemBackdrop, WebGpuPowerPreference, CONFIG_DIRS, CONFIG_FILE_OVERRIDE,
-    CONFIG_OVERRIDES, CONFIG_SKIP, HOME_DIR,
+    SerialDomain, SystemBackdrop, WebGpuPowerPreference, default_config_with_overrides_applied,
+    default_one_point_oh, default_one_point_oh_f64, default_true,
+    default_win32_acrylic_accent_color,
 };
 use anyhow::Context;
 use luahelper::impl_lua_conversion_dynamic;
@@ -954,7 +954,7 @@ impl Config {
     pub fn update_ulimit(&self) -> anyhow::Result<()> {
         #[cfg(unix)]
         {
-            use nix::sys::resource::{getrlimit, rlim_t, setrlimit, Resource};
+            use nix::sys::resource::{Resource, getrlimit, rlim_t, setrlimit};
             use std::convert::TryInto;
 
             let (no_file_soft, no_file_hard) = getrlimit(Resource::RLIMIT_NOFILE)?;
@@ -1017,7 +1017,7 @@ impl Config {
                         file_name: Some(path_item.path.clone()),
                         lua: None,
                         warnings: vec![],
-                    }
+                    };
                 }
                 Ok(None) => continue,
                 Ok(Some(loaded)) => return loaded,
@@ -1648,6 +1648,27 @@ fn default_initial_cols() -> u16 {
     80
 }
 
+// fancy_regex counts any `\b` or lookaround as "hard" and runs such a
+// rule in its own backtracking engine, from every position of every line
+// it scans: about 4-5 µs per line per rule, 0.5-0.9 ms per frame while
+// output scrolls. The rules below match exactly what the upstream rules
+// (`hyperlink::CLOSING_PARENTHESIS_HYPERLINK_PATTERN`,
+// `hyperlink::GENERIC_HYPERLINK_PATTERN` and the `\b`-delimited mailto
+// rule) match, without `\b` or lookaround, so the regex crate runs them
+// (about 40 ns per line):
+// - A leading `\b\w+` adds nothing: the leftmost match always starts at
+//   the first character of a run of word characters, which is a boundary.
+// - The closing-parenthesis lookahead `(?=\s|$|[^_/a-zA-Z0-9-])` becomes
+//   a match on that character outside capture group 1, and group 1 is the
+//   link.
+// - The mailto rule's trailing `[\w-]+\b` always ends after the last word
+//   character of the domain, which `\.[\w-]*\w` says directly.
+// default_rules_match_upstream_rules checks this on random lines.
+const CLOSING_PARENTHESIS_HYPERLINK_PATTERN: &str =
+    r"(\w+://[^\s()]*\(\S*\))(?:\s|$|[^_/a-zA-Z0-9-])";
+const GENERIC_HYPERLINK_PATTERN: &str = r"\w+://\S+[_/a-zA-Z0-9-]";
+const MAILTO_PATTERN: &str = r"\w+@[\w-]+(?:\.[\w-]+)*\.[\w-]*\w";
+
 pub fn default_hyperlink_rules() -> Vec<hyperlink::Rule> {
     vec![
         // First handle URLs wrapped with punctuation (i.e. brackets)
@@ -1657,11 +1678,11 @@ pub fn default_hyperlink_rules() -> Vec<hyperlink::Rule> {
         hyperlink::Rule::with_highlight(r"<(\w+://\S+)>", "$1", 1).unwrap(),
         // Then handle URLs not wrapped in brackets that
         // 1) have a balanced ending parenthesis or
-        hyperlink::Rule::new(hyperlink::CLOSING_PARENTHESIS_HYPERLINK_PATTERN, "$0").unwrap(),
+        hyperlink::Rule::with_highlight(CLOSING_PARENTHESIS_HYPERLINK_PATTERN, "$1", 1).unwrap(),
         // 2) include terminating _, / or - characters, if any
-        hyperlink::Rule::new(hyperlink::GENERIC_HYPERLINK_PATTERN, "$0").unwrap(),
+        hyperlink::Rule::new(GENERIC_HYPERLINK_PATTERN, "$0").unwrap(),
         // implicit mailto link
-        hyperlink::Rule::new(r"\b\w+@[\w-]+(\.[\w-]+)+\b", "mailto:$0").unwrap(),
+        hyperlink::Rule::new(MAILTO_PATTERN, "mailto:$0").unwrap(),
     ]
 }
 
@@ -2131,4 +2152,85 @@ fn default_macos_forward_mods() -> Modifiers {
 
 fn default_colr_rasterizer() -> FontRasterizerSelection {
     FontRasterizerSelection::Harfbuzz
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use termwiz::hyperlink::Rule;
+
+    /// The default rules as upstream wezterm has them.
+    fn upstream_rules() -> Vec<Rule> {
+        vec![
+            Rule::with_highlight(r"\((\w+://\S+)\)", "$1", 1).unwrap(),
+            Rule::with_highlight(r"\[(\w+://\S+)\]", "$1", 1).unwrap(),
+            Rule::with_highlight(r"<(\w+://\S+)>", "$1", 1).unwrap(),
+            Rule::new(hyperlink::CLOSING_PARENTHESIS_HYPERLINK_PATTERN, "$0").unwrap(),
+            Rule::new(hyperlink::GENERIC_HYPERLINK_PATTERN, "$0").unwrap(),
+            Rule::new(r"\b\w+@[\w-]+(\.[\w-]+)+\b", "mailto:$0").unwrap(),
+        ]
+    }
+
+    fn assert_same(line: &str, ours: &[Rule], upstream: &[Rule]) {
+        assert_eq!(
+            Rule::match_hyperlinks(line, ours),
+            Rule::match_hyperlinks(line, upstream),
+            "{line:?}"
+        );
+    }
+
+    // The rewritten rules (no \b, no lookahead, so the regex crate runs
+    // them) must find the same links, at the same places, as upstream's.
+    #[test]
+    fn default_rules_match_upstream_rules() {
+        let ours = default_hyperlink_rules();
+        let upstream = upstream_rules();
+
+        let lines = [
+            "   http://example.com)",
+            "http://example.com/(complete_parentheses)",
+            "http://example.com/(complete_parentheses)>",
+            "http://example.com/(complete_parentheses))",
+            "http://example.com/(complete_parentheses)-((-)-()-_-",
+            "see https://en.wikipedia.org/wiki/Rust_(programming_language) for more",
+            "see https://en.wikipedia.org/wiki/Rust_(programming_language).",
+            "(https://example.com/a_(b)) and [http://x.y/(z)] <ftp://h/(p)q>",
+            "https://a.b/(c) https://d.e/(f)",
+            "https://a.b/(c)é https://a.b/(c)_ xhttps://a.b/(c)",
+            "mail foo@example.com, bar@a-b.c-d- or baz@x.y.-z and q@w.e-",
+            "é@ü.ö a@b.c@d.e foo_bar@baz.qux. me@host",
+            "no links on this line at all, just words (and parens)",
+            "",
+        ];
+        for line in lines {
+            assert_same(line, &ours, &upstream);
+        }
+
+        // Random lines from characters that matter to these patterns.
+        let alphabet: Vec<char> = "ab_-1:/:/()()@@..  é<>[]".chars().collect();
+        let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for _ in 0..200_000 {
+            let len = (next() % 24) as usize;
+            let mut line: String = (0..len)
+                .map(|_| alphabet[(next() % alphabet.len() as u64) as usize])
+                .collect();
+            // Make URL schemes common enough to exercise those rules.
+            if next() % 2 == 0 {
+                let at = (next() as usize % (line.chars().count() + 1)).min(line.chars().count());
+                let byte = line
+                    .char_indices()
+                    .nth(at)
+                    .map(|(i, _)| i)
+                    .unwrap_or(line.len());
+                line.insert_str(byte, "http://");
+            }
+            assert_same(&line, &ours, &upstream);
+        }
+    }
 }
