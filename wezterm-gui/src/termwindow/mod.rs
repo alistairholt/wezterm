@@ -55,7 +55,7 @@ use mux::{Mux, MuxNotification};
 use mux_lua::MuxPane;
 use smol::channel::Sender;
 use smol::Timer;
-use std::cell::{RefCell, RefMut};
+use std::cell::{Cell, RefCell, RefMut};
 use std::collections::{HashMap, LinkedList};
 use std::ops::Add;
 use std::rc::Rc;
@@ -4349,11 +4349,15 @@ struct ClosedTab {
     tab_id: TabId,
     window_id: MuxWindowId,
     idx: usize,
+    /// Tells this close apart from an earlier close of the same tab
+    /// that was undone, so that close's timer leaves this one alone.
+    generation: u64,
 }
 
 thread_local! {
     /// Tabs closed in the last `undo_close_tab_seconds`, oldest first.
     static CLOSED_TABS: RefCell<Vec<ClosedTab>> = RefCell::new(vec![]);
+    static CLOSED_TAB_GENERATION: Cell<u64> = Cell::new(0);
 }
 
 /// Close a tab so that UndoCloseTab can bring it back for
@@ -4380,11 +4384,17 @@ pub fn close_tab_with_undo(tab_id: TabId) {
             return;
         }
     };
+    let generation = CLOSED_TAB_GENERATION.with(|counter| {
+        let next = counter.get() + 1;
+        counter.set(next);
+        next
+    });
     CLOSED_TABS.with(|tabs| {
         tabs.borrow_mut().push(ClosedTab {
             tab_id,
             window_id,
             idx,
+            generation,
         })
     });
     promise::spawn::spawn(async move {
@@ -4392,7 +4402,7 @@ pub fn close_tab_with_undo(tab_id: TabId) {
         let still_closed = CLOSED_TABS.with(|tabs| {
             let mut tabs = tabs.borrow_mut();
             let before = tabs.len();
-            tabs.retain(|closed| closed.tab_id != tab_id);
+            tabs.retain(|closed| closed.generation != generation);
             tabs.len() != before
         });
         if still_closed {

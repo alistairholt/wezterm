@@ -1134,8 +1134,7 @@ impl Mux {
                 .get_window_mut(window_id)
                 .ok_or_else(|| anyhow!("restore_tab_to_window: no window {window_id}"))?;
             let idx = idx.min(window.count_tabs());
-            window.insert_tab_at_idx(idx, &tab);
-            window.remember_and_set_active_tab_idx(idx);
+            window.insert_tab_and_activate(idx, &tab);
         }
         self.recompute_pane_count();
         self.notify(MuxNotification::TabAddedToWindow { tab_id, window_id });
