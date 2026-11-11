@@ -31,6 +31,11 @@ also automatically activate it.
 If you're on another system, more information on how these escapes work
 can be found below.
 
+With shell integration, each prompt whose command has finished gets a
+green or red mark in the gutter, from the command's exit status. Click a
+mark to select that command's output. See
+[command_status_marks](config/lua/config/command_status_marks.md).
+
 [Learn more about OSC 133 Semantic Prompt Escapes](https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/semantic-prompts.md).
 
 ## User Vars

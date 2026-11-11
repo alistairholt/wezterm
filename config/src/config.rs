@@ -225,6 +225,11 @@ pub struct Config {
     #[dynamic(default)]
     pub open_file_command: Option<Vec<String>>,
 
+    /// Draw a green or red mark beside each prompt whose command has
+    /// finished, from the exit status shell integration reports.
+    #[dynamic(default = "default_true")]
+    pub command_status_marks: bool,
+
     /// If no `prog` is specified on the command line, use this
     /// instead of running the user's shell.
     /// For example, to have `wezterm` always run `top` by default,

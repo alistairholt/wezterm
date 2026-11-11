@@ -139,6 +139,10 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* Prompts get a green or red mark in the gutter when their command
+  finishes, from the exit status shell integration reports, like
+  iTerm2's marks. Click a mark to select that command's output. See
+  [command_status_marks](config/lua/config/command_status_marks.md).
 * CMD-click opens the file whose path is under the mouse, like iTerm2's
   semantic history. It reads locations such as `src/main.rs:12:5`,
   looks up relative paths in the pane's current directory, and only acts

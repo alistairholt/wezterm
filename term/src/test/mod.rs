@@ -315,6 +315,36 @@ fn assert_all_contents(term: &Terminal, file: &str, line: u32, expect_lines: &[&
     assert_lines_equal(file, line, &screen.all_lines(), &expect, Compare::TEXT);
 }
 
+/// OSC 133;D reports a command's exit status. It is recorded against the
+/// row where that command's prompt started, so the GUI can mark prompts
+/// by result. Continuation prompts (k=s) and a status with no prompt
+/// before it are ignored, and rows that leave the scrollback are dropped.
+#[test]
+fn test_command_status() {
+    let mut term = TestTerm::new(4, 20, 2);
+    // A prompt, a command that fails, then the next prompt.
+    term.print("\x1b]133;A\x07$ \x1b]133;B\x07false\r\n\x1b]133;C\x07");
+    term.print("\x1b]133;D;1\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+    // A command with a continuation line and output, which succeeds.
+    term.print("echo \\\r\n\x1b]133;P;k=s\x07> \x1b]133;B\x07hi\r\n\x1b]133;C\x07hi\r\n");
+    term.print("\x1b]133;D;0\x07\x1b]133;A\x07$ ");
+
+    // The first line has scrolled into the scrollback.
+    assert_all_contents(
+        &term,
+        file!(),
+        line!(),
+        &["$ false", "$ echo \\", "> hi", "hi", "$ "],
+    );
+    assert_eq!(term.command_statuses(0..100), vec![(0, 1), (1, 0)]);
+    assert_eq!(term.command_statuses(1..2), vec![(1, 0)]);
+
+    // Push the first two prompts out of the scrollback. Their statuses
+    // are dropped when the next status is recorded.
+    term.print("\r\n\r\n\r\n\r\n\x1b]133;D;2\x07\x1b]133;A\x07$ \x1b]133;D;3\x07");
+    assert_eq!(term.command_statuses(0..100), vec![(4, 2), (8, 3)]);
+}
+
 #[test]
 fn test_semantic_1539() {
     use wezterm_escape_parser::osc::FinalTermSemanticPrompt;
