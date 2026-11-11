@@ -318,6 +318,12 @@ pub trait Pane: Downcast + Send + Sync {
         Ok(vec![])
     }
 
+    /// Returns the exit status (from OSC 133;D) of each finished command
+    /// whose prompt started in `range`, as `(prompt_row, status)`.
+    fn get_command_statuses(&self, _range: Range<StableRowIndex>) -> Vec<(StableRowIndex, i32)> {
+        vec![]
+    }
+
     /// Returns true if the terminal has grabbed the mouse and wants to
     /// give the embedded application a chance to process events.
     /// In practice this controls whether the gui will perform local

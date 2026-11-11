@@ -21,7 +21,7 @@ use wezterm_escape_parser::csi::{
     CharacterPath, EraseInDisplay, Keyboard, KittyKeyboardFlags, KittyKeyboardMode,
 };
 use wezterm_escape_parser::osc::{
-    ChangeColorPair, ColorOrQuery, FinalTermSemanticPrompt, ITermProprietary,
+    ChangeColorPair, ColorOrQuery, FinalTermPromptKind, FinalTermSemanticPrompt, ITermProprietary,
     ITermUnicodeVersionOp, Selection,
 };
 use wezterm_escape_parser::{
@@ -871,17 +871,22 @@ impl<'a> Performer<'a> {
                 FinalTermSemanticPrompt::FreshLineAndStartPrompt { .. },
             ) => {
                 self.fresh_line();
+                self.note_prompt_start();
                 self.pen.set_semantic_type(SemanticType::Prompt);
             }
             OperatingSystemCommand::FinalTermSemanticPrompt(
-                FinalTermSemanticPrompt::StartPrompt(_),
+                FinalTermSemanticPrompt::StartPrompt(kind),
             ) => {
+                if kind == FinalTermPromptKind::Initial {
+                    self.note_prompt_start();
+                }
                 self.pen.set_semantic_type(SemanticType::Prompt);
             }
             OperatingSystemCommand::FinalTermSemanticPrompt(
                 FinalTermSemanticPrompt::MarkEndOfCommandWithFreshLine { .. },
             ) => {
                 self.fresh_line();
+                self.note_prompt_start();
                 self.pen.set_semantic_type(SemanticType::Prompt);
             }
             OperatingSystemCommand::FinalTermSemanticPrompt(
@@ -902,8 +907,10 @@ impl<'a> Performer<'a> {
             }
 
             OperatingSystemCommand::FinalTermSemanticPrompt(
-                FinalTermSemanticPrompt::CommandStatus { .. },
-            ) => {}
+                FinalTermSemanticPrompt::CommandStatus { status, .. },
+            ) => {
+                self.note_command_status(status);
+            }
 
             OperatingSystemCommand::SystemNotification(message) => {
                 if let Some(handler) = self.alert_handler.as_mut() {

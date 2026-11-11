@@ -74,6 +74,7 @@ pub mod background;
 pub mod box_model;
 pub mod charselect;
 pub mod clipboard;
+mod command_marks;
 pub mod keyevent;
 pub mod metal_present;
 pub mod modal;
@@ -163,6 +164,11 @@ pub enum UIItemType {
     ScrollThumb,
     BelowScrollThumb,
     Split(PositionedSplit),
+    /// A command status mark beside the prompt that starts at this row.
+    CommandMark {
+        pane_id: PaneId,
+        row: StableRowIndex,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

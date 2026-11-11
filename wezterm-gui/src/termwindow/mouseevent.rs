@@ -8,7 +8,7 @@ use ::window::{
 };
 use config::keyassignment::{KeyAssignment, MouseEventTrigger, SpawnTabDomain};
 use config::MouseEventAltScreen;
-use mux::pane::{Pane, WithPaneLines};
+use mux::pane::{Pane, PaneId, WithPaneLines};
 use mux::tab::SplitDirection;
 use mux::Mux;
 use mux_lua::MuxPane;
@@ -43,7 +43,8 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::CommandMark { .. } => {}
         }
     }
 
@@ -54,7 +55,8 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::CommandMark { .. } => {}
         }
     }
 
@@ -382,6 +384,46 @@ impl super::TermWindow {
             UIItemType::CloseTab(idx) => {
                 self.mouse_event_close_tab(idx, event, context);
             }
+            UIItemType::CommandMark { pane_id, row } => {
+                self.mouse_event_command_mark(pane_id, row, event, context);
+            }
+        }
+    }
+
+    /// Clicking a command status mark selects that command's output.
+    fn mouse_event_command_mark(
+        &mut self,
+        pane_id: PaneId,
+        row: StableRowIndex,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        context.set_cursor(Some(CursorIcon::Pointer));
+        if !matches!(event.kind, WMEK::Press(MousePress::Left)) {
+            return;
+        }
+        let Some(pane) = Mux::get().get_pane(pane_id) else {
+            return;
+        };
+        let zones = match pane.get_semantic_zones() {
+            Ok(zones) => zones,
+            Err(err) => {
+                log::error!("command mark: {err:#}");
+                return;
+            }
+        };
+        // The output ends where the next finished command's prompt starts.
+        let statuses = pane.get_command_statuses(row + 1..StableRowIndex::MAX);
+        let next =
+            super::command_marks::place_marks(&statuses, self.get_semantic_prompt_zones(&pane))
+                .first()
+                .map(|mark| mark.row);
+        match super::command_marks::output_zone(&zones, row, next) {
+            Some(zone) => {
+                let (_first, lines) = pane.get_lines(zone.start_y..zone.end_y + 1);
+                self.select_command_output(&pane, &zone, &lines);
+            }
+            None => log::debug!("command mark at {row}: the command printed nothing"),
         }
     }
 

@@ -269,6 +269,13 @@ pub struct TerminalState {
 
     clear_semantic_attribute_on_newline: bool,
 
+    /// The row where the most recent primary prompt started (OSC 133;A,
+    /// N or P;k=i), taken by the next OSC 133;D to record its status.
+    last_prompt_row: Option<StableRowIndex>,
+    /// The exit status of each finished command (OSC 133;D), keyed by
+    /// the row where that command's prompt started.
+    command_statuses: std::collections::BTreeMap<StableRowIndex, i32>,
+
     /// If true, writing a character inserts a new cell
     insert: bool,
 
@@ -536,6 +543,8 @@ impl TerminalState {
             left_and_right_margin_mode: false,
             wrap_next: false,
             clear_semantic_attribute_on_newline: false,
+            last_prompt_row: None,
+            command_statuses: Default::default(),
             // We default auto wrap to true even though the default for
             // a dec terminal is false, because it is more useful this way.
             dec_auto_wrap: true,
@@ -746,6 +755,37 @@ impl TerminalState {
         }
 
         self.cursor.y = 0;
+    }
+
+    /// Returns the exit status of each finished command whose prompt
+    /// started in `range`, as `(prompt_row, status)`, from OSC 133;D.
+    /// A row may have been overwritten since, for example by clearing
+    /// the screen, so callers should check that it still holds a prompt.
+    pub fn command_statuses(&self, range: Range<StableRowIndex>) -> Vec<(StableRowIndex, i32)> {
+        self.command_statuses
+            .range(range)
+            .map(|(row, status)| (*row, *status))
+            .collect()
+    }
+
+    /// Remembers the cursor row as the start of a primary prompt.
+    fn note_prompt_start(&mut self) {
+        if !self.screen.is_alt_screen_active() {
+            let row = self.screen.visible_row_to_stable_row(self.cursor.y);
+            self.last_prompt_row = Some(row);
+        }
+    }
+
+    /// Records `status` against the row of the prompt that started the
+    /// command that has just finished.
+    fn note_command_status(&mut self, status: i32) {
+        let Some(row) = self.last_prompt_row.take() else {
+            return;
+        };
+        // Forget rows that have left the scrollback.
+        let first_row = self.screen.phys_to_stable_row_index(0);
+        self.command_statuses = self.command_statuses.split_off(&first_row);
+        self.command_statuses.insert(row, status);
     }
 
     /// Discards the scrollback, leaving only the data that is present

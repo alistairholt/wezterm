@@ -21,6 +21,80 @@ use wezterm_term::{Line, StableRowIndex};
 use window::color::LinearRgba;
 
 impl crate::TermWindow {
+    /// Draws a green or red bar in the gutter left of each prompt whose
+    /// command has finished, and registers it as a clickable UI item.
+    fn paint_command_marks(
+        &mut self,
+        pos: &PositionedPane,
+        layers: &mut TripleLayerQuadAllocator,
+        current_viewport: Option<StableRowIndex>,
+        dims: &RenderableDimensions,
+        palette: &ColorPalette,
+        top_pixel_y: f32,
+    ) -> anyhow::Result<()> {
+        let viewport_top = current_viewport.unwrap_or(dims.physical_top);
+        let viewport_end = viewport_top + pos.height as StableRowIndex;
+        // Start a little above the viewport: a status can be recorded on
+        // a blank row just above its prompt's text.
+        let statuses = pos
+            .pane
+            .get_command_statuses(viewport_top.saturating_sub(4)..viewport_end);
+        if statuses.is_empty() {
+            return Ok(());
+        }
+        let marks = crate::termwindow::command_marks::place_marks(
+            &statuses,
+            self.get_semantic_prompt_zones(&pos.pane),
+        );
+
+        let (padding_left, _) = self.padding_left_top();
+        let border = self.get_os_border();
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let cell_height = self.render_metrics.cell_size.height as f32;
+        let text_left = padding_left + border.left.get() as f32 + pos.left as f32 * cell_width;
+        // The space left of the pane's text: the window padding for the
+        // left-most pane, half a cell beside a split otherwise.
+        let gap = if pos.left == 0 {
+            padding_left + border.left.get() as f32
+        } else {
+            cell_width / 2.0
+        };
+        let width = (cell_width / 4.0).max(2.0).round();
+        let in_gutter = gap >= width + 1.0;
+        let x = if pos.left == 0 && gap >= width + 2.0 {
+            (text_left - (gap + width) / 2.0).round()
+        } else if in_gutter {
+            text_left - width - 1.0
+        } else {
+            text_left
+        };
+
+        for mark in marks {
+            if mark.row < viewport_top || mark.row >= viewport_end {
+                continue;
+            }
+            let y = top_pixel_y + (pos.top as f32 + (mark.row - viewport_top) as f32) * cell_height;
+            // ANSI green and red from the pane's color scheme.
+            let color = palette.colors.0[if mark.status == 0 { 2 } else { 1 }];
+            let rect = euclid::rect(x, y + cell_height * 0.15, width, cell_height * 0.7);
+            self.filled_rectangle(layers, 0, rect, color.to_linear())
+                .context("filled_rectangle")?;
+            if in_gutter {
+                self.ui_items.push(UIItem {
+                    x: (text_left - gap).max(0.) as usize,
+                    width: gap as usize,
+                    y: y.max(0.) as usize,
+                    height: cell_height as usize,
+                    item_type: UIItemType::CommandMark {
+                        pane_id: pos.pane.pane_id(),
+                        row: mark.row,
+                    },
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn paint_pane_box_model(&mut self, pos: &PositionedPane) -> anyhow::Result<()> {
         let computed = self.build_pane(pos)?;
         let mut ui_items = computed.ui_items();
@@ -241,6 +315,11 @@ impl crate::TermWindow {
                 self.filled_rectangle(layers, 0, rect, color.to_linear())
                     .context("filled_rectangle")?;
             }
+        }
+
+        if config.command_status_marks {
+            self.paint_command_marks(pos, layers, current_viewport, &dims, &palette, top_pixel_y)
+                .context("paint_command_marks")?;
         }
 
         // FindCursor, like iTerm2's "Find Cursor": a crosshair through
