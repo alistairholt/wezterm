@@ -565,6 +565,7 @@ pub enum KeyAssignment {
     CloseCurrentTab {
         confirm: bool,
     },
+    UndoCloseTab,
     CloseOtherTabs {
         confirm: bool,
     },

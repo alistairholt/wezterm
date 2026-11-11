@@ -2844,6 +2844,11 @@ impl TermWindow {
             }
             CloseCurrentTab { confirm } => self.close_current_tab(*confirm),
             CloseOtherTabs { confirm } => self.close_other_tabs(*confirm),
+            UndoCloseTab => {
+                if !undo_close_tab(self.mux_window_id) {
+                    log::info!("UndoCloseTab: no recently closed tab to bring back");
+                }
+            }
             RenameTab => {
                 let mux = Mux::get();
                 if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
@@ -3533,7 +3538,7 @@ impl TermWindow {
             self.assign_overlay(tab_id, overlay);
             promise::spawn::spawn(future).detach();
         } else {
-            mux.remove_tab(tab_id);
+            close_tab_with_undo(tab_id);
         }
     }
 
@@ -3553,7 +3558,7 @@ impl TermWindow {
             self.assign_overlay(tab_id, overlay);
             promise::spawn::spawn(future).detach();
         } else {
-            mux.remove_tab(tab_id);
+            close_tab_with_undo(tab_id);
         }
     }
 
@@ -4337,6 +4342,93 @@ fn last_command_output_zone(
         "no command output found in pane {}; is shell integration set up?",
         pane.pane_id()
     )
+}
+
+/// A tab closed with undo, waiting for UndoCloseTab or its timeout.
+struct ClosedTab {
+    tab_id: TabId,
+    window_id: MuxWindowId,
+    idx: usize,
+}
+
+thread_local! {
+    /// Tabs closed in the last `undo_close_tab_seconds`, oldest first.
+    static CLOSED_TABS: RefCell<Vec<ClosedTab>> = RefCell::new(vec![]);
+}
+
+/// Close a tab so that UndoCloseTab can bring it back for
+/// `undo_close_tab_seconds`, as iTerm2 does. The tab leaves its window
+/// at once, but its panes keep running until the time is up. The last
+/// tab in a window is closed for good, as is any tab when the setting
+/// is 0, because a window with no tabs closes.
+pub fn close_tab_with_undo(tab_id: TabId) {
+    let mux = Mux::get();
+    let seconds = config::configuration().undo_close_tab_seconds;
+    let alone = mux
+        .window_containing_tab(tab_id)
+        .and_then(|id| mux.get_window(id).map(|w| w.count_tabs() <= 1))
+        .unwrap_or(true);
+    if seconds == 0 || alone {
+        mux.remove_tab(tab_id);
+        return;
+    }
+    let (window_id, idx) = match mux.detach_tab_from_window(tab_id) {
+        Ok(found) => found,
+        Err(err) => {
+            log::error!("close_tab_with_undo: {err:#}");
+            mux.remove_tab(tab_id);
+            return;
+        }
+    };
+    CLOSED_TABS.with(|tabs| {
+        tabs.borrow_mut().push(ClosedTab {
+            tab_id,
+            window_id,
+            idx,
+        })
+    });
+    promise::spawn::spawn(async move {
+        smol::Timer::after(Duration::from_secs(seconds)).await;
+        let still_closed = CLOSED_TABS.with(|tabs| {
+            let mut tabs = tabs.borrow_mut();
+            let before = tabs.len();
+            tabs.retain(|closed| closed.tab_id != tab_id);
+            tabs.len() != before
+        });
+        if still_closed {
+            Mux::get().remove_tab(tab_id);
+        }
+    })
+    .detach();
+}
+
+/// Bring back the most recently closed tab that is still alive, into
+/// the window it came from, or into `fallback_window` if that window
+/// has gone. Returns false if there is nothing to bring back.
+fn undo_close_tab(fallback_window: MuxWindowId) -> bool {
+    let mux = Mux::get();
+    loop {
+        let closed = match CLOSED_TABS.with(|tabs| tabs.borrow_mut().pop()) {
+            Some(closed) => closed,
+            None => return false,
+        };
+        if mux.get_tab(closed.tab_id).is_none() {
+            // Its panes exited while it was closed.
+            continue;
+        }
+        let window_id = if mux.get_window(closed.window_id).is_some() {
+            closed.window_id
+        } else {
+            fallback_window
+        };
+        match mux.restore_tab_to_window(closed.tab_id, window_id, closed.idx) {
+            Ok(()) => return true,
+            Err(err) => {
+                log::error!("UndoCloseTab: {err:#}");
+                mux.remove_tab(closed.tab_id);
+            }
+        }
+    }
 }
 
 thread_local! {
