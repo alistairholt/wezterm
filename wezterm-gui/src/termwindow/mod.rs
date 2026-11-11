@@ -2851,6 +2851,7 @@ impl TermWindow {
                 }
             }
             CloseCurrentPane { confirm } => self.close_current_pane(*confirm),
+            CloseOtherPanes { confirm } => self.close_other_panes(*confirm),
             Nop | DisableDefaultAssignment => {}
             ReloadConfiguration => config::reload(),
             MoveTab(n) => self.move_tab(*n)?,
@@ -3416,6 +3417,66 @@ impl TermWindow {
         } else {
             mux.remove_pane(pane_id);
         }
+    }
+
+    /// Close every pane in the active tab except the active one, like
+    /// kitty's close_other_windows_in_tab. With `confirm`, ask once
+    /// first if any of those panes would prompt on its own.
+    fn close_other_panes(&mut self, confirm: bool) {
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+        let active = match tab.get_active_pane() {
+            Some(pane) => pane,
+            None => return,
+        };
+        let others: Vec<Arc<dyn Pane>> = tab
+            .iter_panes_ignoring_zoom()
+            .into_iter()
+            .map(|pos| pos.pane)
+            .filter(|pane| pane.pane_id() != active.pane_id())
+            .collect();
+        if others.is_empty() {
+            return;
+        }
+
+        let needs_prompt = confirm
+            && others
+                .iter()
+                .any(|pane| !pane.can_close_without_prompting(CloseReason::Pane));
+        let pane_ids: Vec<PaneId> = others.iter().map(|pane| pane.pane_id()).collect();
+        if !needs_prompt {
+            for pane_id in pane_ids {
+                mux.remove_pane(pane_id);
+            }
+            return;
+        }
+
+        let count = pane_ids.len();
+        let message = if count == 1 {
+            "🛑 Really kill the other pane in this tab?".to_string()
+        } else {
+            format!("🛑 Really kill the {count} other panes in this tab?")
+        };
+        let window = self.window.clone().unwrap();
+        let (overlay, future) = start_overlay_pane(self, &active, move |pane_id, mut term| {
+            let confirmed = crate::overlay::confirm::run_confirmation(&message, &mut term)?;
+            TermWindow::schedule_cancel_overlay_for_pane(window, pane_id);
+            if confirmed {
+                promise::spawn::spawn_into_main_thread(async move {
+                    let mux = Mux::get();
+                    for pane_id in pane_ids {
+                        mux.remove_pane(pane_id);
+                    }
+                })
+                .detach();
+            }
+            Ok(())
+        });
+        self.assign_overlay_for_pane(active.pane_id(), overlay);
+        promise::spawn::spawn(future).detach();
     }
 
     fn close_specific_tab(&mut self, tab_idx: usize, confirm: bool) {

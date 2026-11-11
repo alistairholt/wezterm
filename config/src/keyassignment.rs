@@ -623,6 +623,9 @@ pub enum KeyAssignment {
     CloseCurrentPane {
         confirm: bool,
     },
+    CloseOtherPanes {
+        confirm: bool,
+    },
     EmitEvent(String),
     QuickSelect,
     QuickSelectArgs(QuickSelectArguments),
