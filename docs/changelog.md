@@ -22,6 +22,10 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* macOS: during a live window resize, each step now waits briefly (up to
+  [macos_live_resize_repaint_wait_ms](config/lua/config/macos_live_resize_repaint_wait_ms.md),
+  default 8ms) for full-screen programs in the active tab to redraw at the
+  new size, so you no longer see their old layout cut off at the window edge.
 * macOS: with `front_end = "WebGpu"`, wezterm presents Metal frames into its
   own layer, in step with live window resizes, so the window no longer
   stretches or squeezes its content while you drag an edge or corner.

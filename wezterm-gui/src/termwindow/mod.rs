@@ -379,6 +379,9 @@ pub struct TermWindow {
     /// Whether the window is in a live resize, from the last Resized
     /// event. WebGpu frames present in step with the window while true.
     live_resizing: bool,
+    /// Set when a live-resize step resized the active tab's panes; the
+    /// next paint waits on it for those panes to redraw.
+    live_resize_repaint_wait: Option<resize::LiveResizeRepaintWait>,
     is_repaint_pending: bool,
     pending_scale_changes: LinkedList<resize::ScaleChange>,
     /// Terminal dimensions
@@ -711,6 +714,7 @@ impl TermWindow {
             window_state: WindowState::default(),
             resizes_pending: 0,
             live_resizing: false,
+            live_resize_repaint_wait: None,
             is_repaint_pending: false,
             pending_scale_changes: LinkedList::new(),
             terminal_size,
@@ -1012,10 +1016,13 @@ impl TermWindow {
                 if self.resizes_pending > 0 {
                     self.is_repaint_pending = true;
                     Ok(true)
-                } else if self.webgpu.is_some() {
-                    self.do_paint_webgpu()
                 } else {
-                    Ok(self.do_paint(window))
+                    self.wait_for_live_resize_repaint();
+                    if self.webgpu.is_some() {
+                        self.do_paint_webgpu()
+                    } else {
+                        Ok(self.do_paint(window))
+                    }
                 }
             }
             WindowEvent::Notification(item) => {

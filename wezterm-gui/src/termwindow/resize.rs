@@ -2,8 +2,11 @@ use crate::resize_increment_calculator::ResizeIncrementCalculator;
 use crate::utilsprites::RenderMetrics;
 use ::window::{Dimensions, ResizeIncrement, Window, WindowOps, WindowState};
 use config::{ConfigHandle, DimensionContext};
+use mux::output_signal::{RepaintWait, RepaintWaitOutcome};
+use mux::pane::PaneId;
 use mux::Mux;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 use wezterm_font::FontConfiguration;
 use wezterm_term::TerminalSize;
 
@@ -36,6 +39,10 @@ impl super::TermWindow {
             window_state,
         );
         self.live_resizing = live_resizing;
+        if !live_resizing {
+            // A wait left over from the last live-resize step is stale.
+            self.live_resize_repaint_wait.take();
+        }
         if dimensions.pixel_width == 0 || dimensions.pixel_height == 0 {
             // on windows, this can happen when minimizing the window.
             // NOP!
@@ -65,6 +72,19 @@ impl super::TermWindow {
             modal.reconfigure(self);
         }
         self.emit_window_event("window-resized", None);
+    }
+
+    /// Called before painting. If the last live-resize step resized the
+    /// active tab's panes, wait (within the configured budget) for them to
+    /// redraw at the new size, so the frame doesn't show their old layout.
+    pub fn wait_for_live_resize_repaint(&mut self) {
+        let Some(wait) = self.live_resize_repaint_wait.take() else {
+            return;
+        };
+        if !self.live_resizing {
+            return;
+        }
+        wait.wait();
     }
 
     pub fn apply_pending_scale_changes(&mut self) {
@@ -287,9 +307,20 @@ impl super::TermWindow {
 
         log::trace!("apply_dimensions computed size {:?}, dims {:?}", size, dims);
 
+        let cells_changed =
+            self.terminal_size.rows != size.rows || self.terminal_size.cols != size.cols;
         self.terminal_size = size;
 
         let mux = Mux::get();
+        // Mark the active tab's pane output before resizing, so the paint
+        // for this live-resize step can wait for the redraw it causes.
+        if self.live_resizing && cells_changed {
+            self.live_resize_repaint_wait = LiveResizeRepaintWait::begin(
+                &mux,
+                self.mux_window_id,
+                self.config.macos_live_resize_repaint_wait_ms,
+            );
+        }
         if let Some(window) = mux.get_window(self.mux_window_id) {
             for tab in window.iter_tabs() {
                 tab.resize(size);
@@ -561,5 +592,67 @@ pub fn effective_right_padding(config: &ConfigHandle, context: DimensionContext)
         context.pixel_cell as usize
     } else {
         config.window_padding.right.evaluate_as_pixels(context) as usize
+    }
+}
+
+/// The output marks taken for one live-resize step.
+pub struct LiveResizeRepaintWait {
+    /// When the panes were resized.
+    resized: Instant,
+    budget: Duration,
+    panes: Vec<(PaneId, RepaintWait)>,
+}
+
+impl LiveResizeRepaintWait {
+    /// Take output marks for the panes of the window's active tab. Call
+    /// this just before resizing them. Returns None when the wait is turned
+    /// off or no pane can be waited for (for example remote mux panes).
+    fn begin(mux: &Mux, mux_window_id: mux::window::WindowId, budget_ms: u64) -> Option<Self> {
+        if budget_ms == 0 {
+            return None;
+        }
+        let tab = mux.get_active_tab_for_window(mux_window_id)?;
+        let panes: Vec<_> = tab
+            .iter_panes()
+            .into_iter()
+            .filter_map(|pos| {
+                let pane_id = pos.pane.pane_id();
+                let signal = mux.pane_output_signal(pane_id)?;
+                Some((pane_id, signal.begin_wait()))
+            })
+            .collect();
+        if panes.is_empty() {
+            return None;
+        }
+        Some(Self {
+            resized: Instant::now(),
+            budget: Duration::from_millis(budget_ms),
+            panes,
+        })
+    }
+
+    /// Block until each pane has redrawn or the budget runs out.
+    fn wait(self) {
+        let start = Instant::now();
+        let deadline = self.resized + self.budget;
+        for (pane_id, wait) in &self.panes {
+            let outcome = wait.wait(self.resized, deadline);
+            log::trace!(
+                "live resize repaint wait: pane {pane_id} stopped: {} after {:?} since resize",
+                match outcome {
+                    RepaintWaitOutcome::Quiet => "quiet",
+                    RepaintWaitOutcome::SyncEnd => "sync-end",
+                    RepaintWaitOutcome::NoOutput => "no-output",
+                    RepaintWaitOutcome::Budget => "budget",
+                },
+                self.resized.elapsed(),
+            );
+        }
+        log::trace!(
+            "live resize repaint wait: blocked paint for {:?} ({} panes, budget {:?})",
+            start.elapsed(),
+            self.panes.len(),
+            self.budget,
+        );
     }
 }
