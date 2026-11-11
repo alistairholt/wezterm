@@ -176,10 +176,7 @@ impl MappedVertexBuffer {
     fn slice_mut(&mut self, range: std::ops::Range<usize>) -> &mut [Vertex] {
         match self {
             Self::Glium(g) => &mut g.mapping[range],
-            Self::WebGpu(g) => {
-                let mapping: &mut [Vertex] = bytemuck::cast_slice_mut(&mut g.mapping);
-                &mut mapping[range]
-            }
+            Self::WebGpu(g) => &mut g.mapping[range],
         }
     }
 }
@@ -191,59 +188,91 @@ pub struct MappedQuads<'a> {
 }
 
 pub struct WebGpuMappedVertexBuffer {
-    mapping: wgpu::BufferViewMut<'static>,
-    // Owner mapping, must be dropped after mapping
-    _slice: wgpu::BufferSlice<'static>,
+    mapping: &'static mut [Vertex],
+    // Owner of the vertices, must be dropped after mapping
+    _owner: RefMut<'static, VertexBuffer>,
 }
 
+/// A vertex buffer in shared (CPU and GPU visible) Metal memory that
+/// lives as long as its capacity doesn't change. Quads are written
+/// straight into it and the GPU reads them from there: no staging copy.
+///
+/// It replaces making a new mapped wgpu buffer each frame, which made
+/// wgpu allocate and zero-fill a staging buffer of the whole capacity
+/// and then copy all of it.
+///
+/// The CPU must not write while a submitted frame may still be reading,
+/// so `vertices_mut` first waits for the frame that last drew from it.
+/// TripleVertexBuffer rotates three of these, so that frame is three
+/// frames old and has almost always finished.
 pub struct WebGpuVertexBuffer {
     buf: wgpu::Buffer,
+    raw: metal::Buffer,
     num_vertices: usize,
+    /// The frame (WebGpuState::current_frame) that last drew from this.
+    last_frame: std::cell::Cell<Option<u64>>,
     state: Rc<WebGpuState>,
-}
-
-impl std::ops::Deref for WebGpuVertexBuffer {
-    type Target = wgpu::Buffer;
-    fn deref(&self) -> &Self::Target {
-        &self.buf
-    }
 }
 
 impl WebGpuVertexBuffer {
     pub fn new(num_vertices: usize, state: &Rc<WebGpuState>) -> Self {
+        use wgpu::hal::api::Metal;
+
+        // Metal can't make a 0 length buffer.
+        let size = (num_vertices * std::mem::size_of::<Vertex>()).max(256) as u64;
+        let raw_device = unsafe {
+            state
+                .device
+                .as_hal::<Metal, _, _>(|d| d.map(|d| d.raw_device().lock().clone()))
+        }
+        .expect("WebGpu device is Metal");
+        let raw = raw_device.new_buffer(
+            size,
+            metal::MTLResourceOptions::StorageModeShared
+                | metal::MTLResourceOptions::CPUCacheModeDefaultCache,
+        );
+        let buf = unsafe {
+            // wgpu treats a buffer from hal as fully initialized, so it
+            // never clears it over what we wrote.
+            let hal_buffer = wgpu::hal::metal::Device::buffer_from_raw(raw.clone(), size);
+            state.device.create_buffer_from_hal::<Metal>(
+                hal_buffer,
+                &wgpu::BufferDescriptor {
+                    label: Some("Vertex Buffer"),
+                    size,
+                    usage: wgpu::BufferUsages::VERTEX,
+                    mapped_at_creation: false,
+                },
+            )
+        };
         Self {
-            buf: state.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Vertex Buffer"),
-                size: (num_vertices * std::mem::size_of::<Vertex>()) as wgpu::BufferAddress,
-                usage: wgpu::BufferUsages::VERTEX,
-                mapped_at_creation: true,
-            }),
+            buf,
+            raw,
             num_vertices,
+            last_frame: std::cell::Cell::new(None),
             state: Rc::clone(state),
         }
     }
 
-    pub fn map(&self) -> WebGpuMappedVertexBuffer {
-        unsafe {
-            let slice = self.buf.slice(..).extend_lifetime();
-            let mapping = slice.get_mapped_range_mut();
-
-            WebGpuMappedVertexBuffer {
-                mapping,
-                _slice: slice,
-            }
+    /// The vertices, to fill in for the frame being built.
+    ///
+    /// # Safety
+    /// The slice points into `raw`; the caller must not use it after this
+    /// buffer is dropped or drawn from (`draw_slice`).
+    unsafe fn vertices_mut(&self) -> &'static mut [Vertex] {
+        if let Some(frame) = self.last_frame.get() {
+            self.state.wait_for_frame(frame);
         }
+        std::slice::from_raw_parts_mut(self.raw.contents() as *mut Vertex, self.num_vertices)
     }
 
-    pub fn recreate(&mut self) -> wgpu::Buffer {
-        let mut new_buf = self.state.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Vertex Buffer"),
-            size: (self.num_vertices * std::mem::size_of::<Vertex>()) as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::VERTEX,
-            mapped_at_creation: true,
-        });
-        std::mem::swap(&mut new_buf, &mut self.buf);
-        new_buf
+    /// The part of the buffer holding the first `vertex_count` vertices,
+    /// for drawing in the current frame.
+    pub fn draw_slice(&self, vertex_count: usize) -> wgpu::BufferSlice<'_> {
+        self.last_frame.set(Some(self.state.current_frame()));
+        let vertex_count = vertex_count.min(self.num_vertices);
+        self.buf
+            .slice(..(vertex_count * std::mem::size_of::<Vertex>()) as wgpu::BufferAddress)
     }
 }
 
@@ -357,13 +386,6 @@ unsafe impl<'a, T: 'static> ExtendStatic for RefMut<'a, T> {
     }
 }
 
-unsafe impl<'a> ExtendStatic for wgpu::BufferSlice<'a> {
-    type T = wgpu::BufferSlice<'static>;
-    unsafe fn extend_lifetime(self) -> Self::T {
-        std::mem::transmute(self)
-    }
-}
-
 unsafe impl<'a> ExtendStatic for MappedQuads<'a> {
     type T = MappedQuads<'static>;
     unsafe fn extend_lifetime(self) -> Self::T {
@@ -426,7 +448,15 @@ impl TripleVertexBuffer {
                     mapping,
                 })
             }
-            VertexBuffer::WebGpu(vb) => MappedVertexBuffer::WebGpu(vb.map()),
+            VertexBuffer::WebGpu(vb) => {
+                // Same trick as above: the RefMut owns the buffer that
+                // the slice points into, and is dropped after it.
+                let mapping = unsafe { vb.vertices_mut() };
+                MappedVertexBuffer::WebGpu(WebGpuMappedVertexBuffer {
+                    mapping,
+                    _owner: bufs,
+                })
+            }
         };
 
         MappedQuads {

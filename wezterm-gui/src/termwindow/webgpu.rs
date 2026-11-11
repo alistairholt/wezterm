@@ -2,6 +2,9 @@ use crate::quad::Vertex;
 use crate::termwindow::metal_present::MetalPresenter;
 use anyhow::anyhow;
 use config::{ConfigHandle, GpuInfo, WebGpuPowerPreference};
+use std::cell::{Cell, Ref, RefCell};
+use std::collections::VecDeque;
+use std::rc::Rc;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use window::bitmaps::Texture2d;
@@ -29,11 +32,27 @@ pub struct WebGpuState {
     /// Presents into the view's CAMetalLayer; replaces wgpu::Surface.
     pub presenter: MetalPresenter,
     pub render_pipeline: wgpu::RenderPipeline,
-    shader_uniform_bind_group_layout: wgpu::BindGroupLayout,
-    pub texture_bind_group_layout: wgpu::BindGroupLayout,
-    pub texture_nearest_sampler: wgpu::Sampler,
-    pub texture_linear_sampler: wgpu::Sampler,
+    /// One uniform buffer, rewritten each frame by write_uniform.
+    uniform_buffer: wgpu::Buffer,
+    pub uniform_bind_group: wgpu::BindGroup,
+    atlas_bind_groups: RefCell<Option<AtlasBindGroups>>,
+    /// Number of the frame being built; goes up on each note_submission.
+    frame: Cell<u64>,
+    /// The last few frames and their submissions, oldest first.
+    submissions: RefCell<VecDeque<(u64, wgpu::SubmissionIndex)>>,
+    /// The newest frame known to have finished on the GPU.
+    finished_frame: Cell<Option<u64>>,
+    texture_bind_group_layout: wgpu::BindGroupLayout,
+    texture_nearest_sampler: wgpu::Sampler,
+    texture_linear_sampler: wgpu::Sampler,
     pub handle: RawHandlePair,
+}
+
+/// Bind groups for one glyph atlas texture; see atlas_bind_groups.
+pub struct AtlasBindGroups {
+    texture: Rc<dyn Texture2d>,
+    pub linear: wgpu::BindGroup,
+    pub nearest: wgpu::BindGroup,
 }
 
 pub struct RawHandlePair {
@@ -440,6 +459,20 @@ impl WebGpuState {
             cache: None,
         });
 
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ShaderUniform Buffer"),
+            contents: bytemuck::cast_slice(&[ShaderUniform::default()]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &shader_uniform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+            label: Some("ShaderUniform Bind Group"),
+        });
+
         Ok(Self {
             adapter_info,
             downlevel_caps,
@@ -448,28 +481,107 @@ impl WebGpuState {
             presenter,
             render_pipeline,
             handle,
-            shader_uniform_bind_group_layout,
+            uniform_buffer,
+            uniform_bind_group,
+            atlas_bind_groups: RefCell::new(None),
+            frame: Cell::new(0),
+            submissions: RefCell::new(VecDeque::new()),
+            finished_frame: Cell::new(None),
             texture_bind_group_layout,
             texture_nearest_sampler,
             texture_linear_sampler,
         })
     }
 
-    pub fn create_uniform(&self, uniform: ShaderUniform) -> wgpu::BindGroup {
-        let buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("ShaderUniform Buffer"),
-                contents: bytemuck::cast_slice(&[uniform]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &self.shader_uniform_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
-            label: Some("ShaderUniform Bind Group"),
-        })
+    /// The number of the frame being built.
+    pub fn current_frame(&self) -> u64 {
+        self.frame.get()
+    }
+
+    /// Record the submission that draws the current frame, and move on
+    /// to the next frame.
+    pub fn note_submission(&self, index: wgpu::SubmissionIndex) {
+        let frame = self.frame.get();
+        let mut submissions = self.submissions.borrow_mut();
+        submissions.push_back((frame, index));
+        // Buffers are reused three frames later; a few more for slack.
+        while submissions.len() > 8 {
+            submissions.pop_front();
+        }
+        self.frame.set(frame + 1);
+    }
+
+    /// Block until the GPU has finished `frame`. Submissions finish in
+    /// order, so if `frame` has dropped out of the list, waiting for the
+    /// oldest one still in it covers it too.
+    pub fn wait_for_frame(&self, frame: u64) {
+        // Every vertex buffer asks; poll only when this frame isn't
+        // already known to be done.
+        if self.finished_frame.get().is_some_and(|done| done >= frame) {
+            return;
+        }
+        let found = self
+            .submissions
+            .borrow()
+            .iter()
+            .find(|(f, _)| *f >= frame)
+            .map(|(f, index)| (*f, index.clone()));
+        if let Some((waited_frame, index)) = found {
+            match self
+                .device
+                .poll(wgpu::PollType::WaitForSubmissionIndex(index))
+            {
+                Ok(_) => self.finished_frame.set(Some(waited_frame)),
+                Err(err) => log::error!("waiting for frame {frame} on the GPU: {err:#}"),
+            }
+        }
+    }
+
+    /// Set this frame's uniforms. The write is queue-ordered: it lands
+    /// before the next submit's commands and after the previous ones, so
+    /// a frame still on the GPU keeps its own values.
+    pub fn write_uniform(&self, uniform: ShaderUniform) {
+        self.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniform]));
+    }
+
+    /// The linear and nearest bind groups for the glyph atlas `texture`,
+    /// made again only when the atlas texture is replaced (it is
+    /// reallocated when it grows or the font scale changes).
+    pub fn atlas_bind_groups(&self, texture: &Rc<dyn Texture2d>) -> Ref<'_, AtlasBindGroups> {
+        let stale = match &*self.atlas_bind_groups.borrow() {
+            // The cache holds a clone of the Rc, so the address can't be
+            // reused by a new texture while it is cached.
+            Some(cached) => !std::ptr::addr_eq(Rc::as_ptr(&cached.texture), Rc::as_ptr(texture)),
+            None => true,
+        };
+        if stale {
+            let tex = texture.downcast_ref::<WebGpuTexture>().unwrap();
+            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            let make = |sampler: &wgpu::Sampler, label| {
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    layout: &self.texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(sampler),
+                        },
+                    ],
+                    label: Some(label),
+                })
+            };
+            let linear = make(&self.texture_linear_sampler, "linear bind group");
+            let nearest = make(&self.texture_nearest_sampler, "nearest bind group");
+            self.atlas_bind_groups.replace(Some(AtlasBindGroups {
+                texture: Rc::clone(texture),
+                linear,
+                nearest,
+            }));
+        }
+        Ref::map(self.atlas_bind_groups.borrow(), |c| c.as_ref().unwrap())
     }
 }
