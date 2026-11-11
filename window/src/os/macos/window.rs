@@ -611,6 +611,16 @@ impl WindowOps for Window {
         });
     }
 
+    fn request_attention(&self) {
+        // NSInformationalRequest bounces the Dock icon once. AppKit
+        // ignores the request while the app is active.
+        const NS_INFORMATIONAL_REQUEST: NSInteger = 10;
+        unsafe {
+            let _: NSInteger =
+                msg_send![cocoa::appkit::NSApp(), requestUserAttention: NS_INFORMATIONAL_REQUEST];
+        }
+    }
+
     fn hide(&self) {
         Connection::with_window_inner(self.id, |inner| {
             inner.hide();

@@ -1198,6 +1198,11 @@ impl TermWindow {
                         AudibleBell::Disabled => {}
                     }
 
+                    if self.config.window_alert_on_bell && self.focused.is_none() {
+                        log::debug!("bell in unfocused window: requesting attention");
+                        window.request_attention();
+                    }
+
                     log::trace!("Ding! (this is the bell) in pane {}", pane_id);
                     self.emit_window_event("bell", Some(pane_id));
 

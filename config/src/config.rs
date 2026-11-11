@@ -857,6 +857,11 @@ pub struct Config {
     #[dynamic(default)]
     pub audible_bell: AudibleBell,
 
+    /// Bounce the Dock icon when a bell rings while WezTerm isn't the
+    /// active app.
+    #[dynamic(default = "default_true")]
+    pub window_alert_on_bell: bool,
+
     #[dynamic(default)]
     pub canonicalize_pasted_newlines: Option<NewlineCanon>,
 
