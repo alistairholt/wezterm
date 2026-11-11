@@ -1984,6 +1984,10 @@ impl TermWindow {
         if tabs_count == 0 {
             return;
         }
+        // A title set with `wezterm cli set-window-title` or
+        // `MuxWindow:set_title` replaces the pane title in the default
+        // window title.
+        let window_title = window.get_explicit_title().map(str::to_string);
         drop(window);
 
         let title = match config::run_immediate_with_lua_config(|lua| {
@@ -2023,15 +2027,16 @@ impl TermWindow {
             Some(title) => title,
             None => {
                 if let (Some(pos), Some(tab)) = (active_pane, active_tab) {
+                    let title = window_title.as_deref().unwrap_or(&pos.title);
                     if tabs_count == 1 {
-                        format!("{}{}", if pos.is_zoomed { "[Z] " } else { "" }, pos.title)
+                        format!("{}{}", if pos.is_zoomed { "[Z] " } else { "" }, title)
                     } else {
                         format!(
                             "{}[{}/{}] {}",
                             if pos.is_zoomed { "[Z] " } else { "" },
                             tab.tab_index + 1,
                             tabs_count,
-                            pos.title
+                            title
                         )
                     }
                 } else {

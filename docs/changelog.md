@@ -222,6 +222,9 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* `wezterm cli set-window-title` and `MuxWindow:set_title` had no
+  visible effect: the window kept showing the active pane's title. The
+  title now shows until a pane sets a new title. #4899
 * Kitty keyboard protocol: with "report all keys as escape codes" (flag 8)
   enabled, text keys were still sent as plain text, and Ctrl+letter as a
   control character. They are now sent as `CSI ... u` sequences. #4003
