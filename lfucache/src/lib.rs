@@ -1,7 +1,7 @@
 use ahash::AHasher;
 use config::ConfigHandle;
 use intrusive_collections::{
-    intrusive_adapter, Bound, KeyAdapter, LinkedList, LinkedListLink, RBTree, RBTreeLink,
+    intrusive_adapter, KeyAdapter, LinkedList, LinkedListLink, RBTree, RBTreeLink,
 };
 use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
@@ -21,6 +21,9 @@ struct Entry<K, V> {
     /// in the tree when eviction reaches it. `tree_freq <= freq` always
     /// holds, so the tree's minimum is never above the real minimum.
     tree_freq: Cell<u16>,
+    /// The `last_tick` the entry is filed under. Entries with the same
+    /// count are ordered by it, so the least recently used goes first.
+    tree_tick: Cell<u32>,
     last_tick: RefCell<u32>,
     key: K,
     value: V,
@@ -30,11 +33,11 @@ intrusive_adapter!(RecencyAdapter<K,V> = Rc<Entry<K,V>>: Entry<K,V> { recency_li
 intrusive_adapter!(FrequenceAdapter<K,V> = Rc<Entry<K,V>>: Entry<K,V> { frequency_link: RBTreeLink });
 intrusive_adapter!(HashAdapter<K,V> = Rc<Entry<K,V>>: Entry<K,V> { hash_link: LinkedListLink });
 
-/// Key by Entry::tree_freq
+/// Key by Entry::tree_freq, then Entry::tree_tick
 impl<'a, K, V> KeyAdapter<'a> for FrequenceAdapter<K, V> {
-    type Key = u16;
-    fn get_key(&self, entry: &'a Entry<K, V>) -> u16 {
-        entry.tree_freq.get()
+    type Key = (u16, u32);
+    fn get_key(&self, entry: &'a Entry<K, V>) -> (u16, u32) {
+        (entry.tree_freq.get(), entry.tree_tick.get())
     }
 }
 
@@ -197,6 +200,7 @@ impl<K: Hash + Eq + Clone + Debug, V, S: Default + BuildHasher> LfuCache<K, V, S
                         .remove()
                         .unwrap();
                     lfu_entry.tree_freq.set(freq);
+                    lfu_entry.tree_tick.set(*lfu_entry.last_tick.borrow());
                     self.frequency_index.insert(lfu_entry);
                 }
             }
@@ -212,20 +216,24 @@ impl<K: Hash + Eq + Clone + Debug, V, S: Default + BuildHasher> LfuCache<K, V, S
     fn evict_one(&mut self) {
         self.decay_least_recent();
 
-        // Take the entry filed with the lowest count. If it has been hit
-        // since it was filed, file it again under its real count and look
-        // again: since filed counts never exceed real ones, the first
-        // entry whose filed count is current has the lowest real count.
+        // Take the entry filed with the lowest count. If it has been used
+        // since it was filed, file it again under its real count and last
+        // use, and look again. Filed counts never exceed real ones, and
+        // filed ticks never exceed real ones, so the first entry that is
+        // filed as it really is has the lowest count and, among entries
+        // with that count, the oldest last use.
         let entry = loop {
-            let mut cursor = self.frequency_index.lower_bound_mut(Bound::Included(&0));
+            let mut cursor = self.frequency_index.front_mut();
             let Some(entry) = cursor.remove() else {
                 return;
             };
             let freq = *entry.freq.borrow();
-            if entry.tree_freq.get() == freq {
+            let last_tick = *entry.last_tick.borrow();
+            if entry.tree_freq.get() == freq && entry.tree_tick.get() == last_tick {
                 break entry;
             }
             entry.tree_freq.set(freq);
+            entry.tree_tick.set(last_tick);
             self.frequency_index.insert(entry);
         };
         {
@@ -328,6 +336,7 @@ impl<K: Hash + Eq + Clone + Debug, V, S: Default + BuildHasher> LfuCache<K, V, S
             value: v,
             freq: RefCell::new(0),
             tree_freq: Cell::new(0),
+            tree_tick: Cell::new(self.tick),
             recency_link: LinkedListLink::new(),
             frequency_link: RBTreeLink::new(),
             hash_link: LinkedListLink::new(),
@@ -776,6 +785,23 @@ mod test {
         assert!(cache.get(&1).is_some());
         assert!(cache.get(&2).is_some());
         assert!(cache.get(&4).is_some());
+    }
+
+    /// Among entries with the same count, the least recently used one is
+    /// evicted, even when the more recent one was filed first.
+    #[test]
+    fn equal_counts_evict_least_recent() {
+        let mut cache = LfuCacheU64::with_capacity(2);
+        cache.put(1, 1);
+        cache.put(2, 2);
+        // Both now have a count of 1; 2 was used before 1.
+        cache.get(&2);
+        cache.get(&1);
+
+        cache.put(3, 3);
+        assert!(cache.get(&2).is_none(), "2 was used least recently");
+        assert!(cache.get(&1).is_some());
+        assert!(cache.get(&3).is_some());
     }
 
     #[test]
