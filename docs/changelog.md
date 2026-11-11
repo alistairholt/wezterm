@@ -47,6 +47,12 @@ As features stabilize some brief notes about them will accumulate here.
 * The GUI's least-frequently-used caches no longer re-sort an entry on
   every hit; entries are re-sorted only when the cache needs to evict one.
   This saves about 6ms of main thread CPU per second while output scrolls.
+* macOS: painting is paced by the window's display link instead of a
+  [max_fps](config/lua/config/max_fps.md) timer. Frames now follow the
+  display's refresh, up to `max_fps`, which now defaults to `120` (was
+  `60`), so ProMotion displays get 120Hz and 60Hz displays are unchanged.
+  The timer topped out at about 60 frames per second. An idle window
+  doesn't paint at all.
 * macOS: during a live window resize, each step now waits briefly (up to
   [macos_live_resize_repaint_wait_ms](config/lua/config/macos_live_resize_repaint_wait_ms.md),
   default 8ms) for full-screen programs in the active tab to redraw at the
