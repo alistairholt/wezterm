@@ -25,6 +25,11 @@ impl Menu {
         }
     }
 
+    /// The underlying NSMenu.
+    pub fn as_id(&self) -> id {
+        *self.menu
+    }
+
     pub fn autorelease(self) -> *mut Object {
         self.menu.autorelease()
     }
@@ -212,7 +217,10 @@ impl MenuItem {
     }
 
     pub fn new_separator() -> Self {
-        let item = unsafe { StrongPtr::new(NSMenuItem::separatorItem(nil)) };
+        // separatorItem returns an autoreleased item that we don't own,
+        // so retain it. Taking it as owned released it once too often
+        // when a menu that was thrown away, like a context menu, freed it.
+        let item = unsafe { StrongPtr::retain(NSMenuItem::separatorItem(nil)) };
         Self { item }
     }
 
@@ -355,6 +363,12 @@ impl MenuItem {
     pub fn get_represented_item(&self) -> Option<RepresentedItem> {
         let wrapper = self.get_represented_object()?;
         unsafe { RepresentedItem::ref_item(*wrapper) }
+    }
+
+    pub fn set_enabled(&self, enabled: bool) {
+        unsafe {
+            let () = msg_send![*self.item, setEnabled: if enabled { YES } else { NO }];
+        }
     }
 
     /// Show or hide the checkmark next to the item.

@@ -61,6 +61,7 @@ local act = wezterm.action
 | Single Left Drag | `SUPER` | `act.StartWindowDrag` (*since 20210314-114017-04b7cedd*) |
 | Single Left Drag | `CTRL+SHIFT` | `act.StartWindowDrag` (*since 20210314-114017-04b7cedd*) |
 | Single Left Up | `SUPER` | `act.OpenFileAtMouseCursor` {{since('nightly', inline=True)}} |
+| Single Right Down | `NONE` | `act.ShowContextMenu` {{since('nightly', inline=True)}} |
 
 If you don't want the default assignments to be registered, you can
 disable all of them with this configuration; if you chose to do this,

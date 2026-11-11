@@ -226,6 +226,9 @@ impl GuiFrontEnd {
         // Re-evaluate the config so that folks that are using
         // `wezterm.gui.get_appearance()` can have that take effect
         // before any windows are created
+        crate::termwindow::note_system_appearance(
+            ::window::Connection::get().unwrap().get_appearance(),
+        );
         config::reload();
 
         // And build the initial menu bar.
