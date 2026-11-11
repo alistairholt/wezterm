@@ -31,6 +31,9 @@ As features stabilize some brief notes about them will accumulate here.
 * macOS: with `front_end = "WebGpu"`, drawing a frame takes about 0.15ms
   instead of about 1ms of CPU: vertices are written straight into memory
   the GPU reads, and the whole frame is drawn in one render pass.
+* Each changed line on screen is hashed (to look it up in the shaping
+  caches) about 3 times faster, which cuts main thread CPU time while
+  output scrolls or a full-screen program redraws.
 * macOS: during a live window resize, each step now waits briefly (up to
   [macos_live_resize_repaint_wait_ms](config/lua/config/macos_live_resize_repaint_wait_ms.md),
   default 8ms) for full-screen programs in the active tab to redraw at the
