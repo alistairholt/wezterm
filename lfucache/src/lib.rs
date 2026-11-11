@@ -4,7 +4,7 @@ use intrusive_collections::{
     intrusive_adapter, Bound, KeyAdapter, LinkedList, LinkedListLink, RBTree, RBTreeLink,
 };
 use std::borrow::Borrow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Eq;
 use std::fmt::Debug;
 use std::hash::{BuildHasher, BuildHasherDefault, Hash, Hasher};
@@ -14,7 +14,13 @@ struct Entry<K, V> {
     hash_link: LinkedListLink,
     recency_link: LinkedListLink,
     frequency_link: RBTreeLink,
+    /// The entry's current use count.
     freq: RefCell<u16>,
+    /// The use count the entry is filed under in `frequency_index`.
+    /// A hit only bumps `freq`; the entry is moved to its right place
+    /// in the tree when eviction reaches it. `tree_freq <= freq` always
+    /// holds, so the tree's minimum is never above the real minimum.
+    tree_freq: Cell<u16>,
     last_tick: RefCell<u32>,
     key: K,
     value: V,
@@ -24,11 +30,11 @@ intrusive_adapter!(RecencyAdapter<K,V> = Rc<Entry<K,V>>: Entry<K,V> { recency_li
 intrusive_adapter!(FrequenceAdapter<K,V> = Rc<Entry<K,V>>: Entry<K,V> { frequency_link: RBTreeLink });
 intrusive_adapter!(HashAdapter<K,V> = Rc<Entry<K,V>>: Entry<K,V> { hash_link: LinkedListLink });
 
-/// Key by Entry::freq
+/// Key by Entry::tree_freq
 impl<'a, K, V> KeyAdapter<'a> for FrequenceAdapter<K, V> {
     type Key = u16;
     fn get_key(&self, entry: &'a Entry<K, V>) -> u16 {
-        *entry.freq.borrow()
+        entry.tree_freq.get()
     }
 }
 
@@ -176,18 +182,23 @@ impl<K: Hash + Eq + Clone + Debug, V, S: Default + BuildHasher> LfuCache<K, V, S
                 return;
             }
 
-            // Adjust lfu
-            unsafe {
-                let lfu_entry = self
-                    .frequency_index
-                    .cursor_mut_from_ptr(entry)
-                    .remove()
-                    .unwrap();
-                {
-                    let mut freq = entry.freq.borrow_mut();
-                    *freq = *freq / delta;
+            // Adjust lfu. The tree only needs updating if the entry's
+            // filed count is now above its real count.
+            let freq = {
+                let mut freq = entry.freq.borrow_mut();
+                *freq = *freq / delta;
+                *freq
+            };
+            if entry.tree_freq.get() > freq {
+                unsafe {
+                    let lfu_entry = self
+                        .frequency_index
+                        .cursor_mut_from_ptr(entry)
+                        .remove()
+                        .unwrap();
+                    lfu_entry.tree_freq.set(freq);
+                    self.frequency_index.insert(lfu_entry);
                 }
-                self.frequency_index.insert(lfu_entry);
             }
 
             // Adjust lru so that we don't immediately revisit this one
@@ -201,8 +212,23 @@ impl<K: Hash + Eq + Clone + Debug, V, S: Default + BuildHasher> LfuCache<K, V, S
     fn evict_one(&mut self) {
         self.decay_least_recent();
 
-        let mut cursor = self.frequency_index.lower_bound_mut(Bound::Included(&0));
-        if let Some(entry) = cursor.remove() {
+        // Take the entry filed with the lowest count. If it has been hit
+        // since it was filed, file it again under its real count and look
+        // again: since filed counts never exceed real ones, the first
+        // entry whose filed count is current has the lowest real count.
+        let entry = loop {
+            let mut cursor = self.frequency_index.lower_bound_mut(Bound::Included(&0));
+            let Some(entry) = cursor.remove() else {
+                return;
+            };
+            let freq = *entry.freq.borrow();
+            if entry.tree_freq.get() == freq {
+                break entry;
+            }
+            entry.tree_freq.set(freq);
+            self.frequency_index.insert(entry);
+        };
+        {
             let bucket = self.bucket_for_key(&entry.key);
             unsafe {
                 self.buckets
@@ -251,18 +277,11 @@ impl<K: Hash + Eq + Clone + Debug, V, S: Default + BuildHasher> LfuCache<K, V, S
 
                 *entry.last_tick.borrow_mut() = self.tick;
 
-                // Adjust lfu
-                unsafe {
-                    let lfu_entry = self
-                        .frequency_index
-                        .cursor_mut_from_ptr(entry)
-                        .remove()
-                        .unwrap();
-                    {
-                        let mut freq = lfu_entry.freq.borrow_mut();
-                        *freq = freq.saturating_add(1);
-                    }
-                    self.frequency_index.insert(lfu_entry);
+                // Adjust lfu. The frequency index is brought up to date
+                // lazily in evict_one, so a hit doesn't touch the tree.
+                {
+                    let mut freq = entry.freq.borrow_mut();
+                    *freq = freq.saturating_add(1);
                 }
 
                 return Some(&entry.value);
@@ -308,6 +327,7 @@ impl<K: Hash + Eq + Clone + Debug, V, S: Default + BuildHasher> LfuCache<K, V, S
             key: k,
             value: v,
             freq: RefCell::new(0),
+            tree_freq: Cell::new(0),
             recency_link: LinkedListLink::new(),
             frequency_link: RBTreeLink::new(),
             hash_link: LinkedListLink::new(),
@@ -356,6 +376,9 @@ mod test {
         for item in cache.frequency_index.iter() {
             entries.push(EntryData::new(item));
         }
+        // The tree files entries lazily (see Entry::tree_freq), so list
+        // them by their real count, oldest use first within a count.
+        entries.sort_by_key(|e| (e.freq, e.last_tick));
         entries
     }
 
@@ -680,6 +703,12 @@ mod test {
 [
     EntryData {
         freq: 1,
+        last_tick: 10,
+        key: 3,
+        value: 3,
+    },
+    EntryData {
+        freq: 1,
         last_tick: 39,
         key: 9,
         value: 9,
@@ -689,12 +718,6 @@ mod test {
         last_tick: 41,
         key: 10,
         value: 10,
-    },
-    EntryData {
-        freq: 1,
-        last_tick: 10,
-        key: 3,
-        value: 3,
     },
     EntryData {
         freq: 1,
@@ -729,6 +752,30 @@ mod test {
 ]
 "
         );
+    }
+
+    /// Hits only bump an entry's count and leave it filed under its old
+    /// count in the frequency tree. Eviction must still remove the entry
+    /// with the lowest real count, not the first one filed.
+    #[test]
+    fn eviction_uses_real_counts() {
+        let mut cache = LfuCacheU64::with_capacity(3);
+        for i in 1..=3 {
+            cache.put(i, i);
+        }
+        // All three are filed under 0; their real counts are 3, 3 and 1.
+        for _ in 0..3 {
+            cache.get(&1);
+            cache.get(&2);
+        }
+        cache.get(&3);
+
+        cache.put(4, 4);
+        k9::assert_equal!(cache.len(), 3);
+        assert!(cache.get(&3).is_none(), "3 had the lowest count");
+        assert!(cache.get(&1).is_some());
+        assert!(cache.get(&2).is_some());
+        assert!(cache.get(&4).is_some());
     }
 
     #[test]
