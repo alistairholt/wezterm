@@ -219,6 +219,12 @@ pub struct Config {
     #[dynamic(default = "default_scrollback_pager")]
     pub scrollback_pager: Vec<String>,
 
+    /// The command, with arguments, that OpenFileAtMouseCursor runs to
+    /// open a file. `{file}`, `{line}` and `{column}` are replaced in each
+    /// argument. When unset, the file is opened with macOS's `open`.
+    #[dynamic(default)]
+    pub open_file_command: Option<Vec<String>>,
+
     /// If no `prog` is specified on the command line, use this
     /// instead of running the user's shell.
     /// For example, to have `wezterm` always run `top` by default,

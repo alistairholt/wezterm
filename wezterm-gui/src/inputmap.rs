@@ -346,6 +346,18 @@ impl InputMap {
                     },
                     StartWindowDrag
                 ],
+                [
+                    MouseEventTriggerMods {
+                        mods: Modifiers::SUPER,
+                        mouse_reporting: false,
+                        alt_screen: MouseEventAltScreen::Any,
+                    },
+                    MouseEventTrigger::Up {
+                        streak: 1,
+                        button: MouseButton::Left,
+                    },
+                    OpenFileAtMouseCursor
+                ],
             );
         }
 
