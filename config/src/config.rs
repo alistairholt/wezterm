@@ -738,6 +738,16 @@ pub struct Config {
     #[dynamic(default)]
     pub notification_handling: NotificationHandling,
 
+    /// Show a notification when a command that ran for at least
+    /// `notify_on_command_finish_after_secs` finishes. Needs the shell
+    /// integration, which reports commands through the WEZTERM_PROG
+    /// user variable.
+    #[dynamic(default)]
+    pub notify_on_command_finish: NotifyOnCommandFinish,
+
+    #[dynamic(default = "default_notify_on_command_finish_after_secs")]
+    pub notify_on_command_finish_after_secs: f64,
+
     #[dynamic(default = "default_true")]
     pub use_dead_keys: bool,
 
@@ -2140,6 +2150,18 @@ pub enum ImePreeditRendering {
     System,
 }
 
+/// When to show a notification as a long command finishes.
+#[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NotifyOnCommandFinish {
+    #[default]
+    Never,
+    /// Only while the window isn't focused.
+    Unfocused,
+    /// While the window isn't focused, or the pane isn't on screen.
+    Invisible,
+    Always,
+}
+
 #[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NotificationHandling {
     #[default]
@@ -2190,6 +2212,10 @@ fn default_macos_forward_mods() -> Modifiers {
 fn default_scrollback_pager() -> Vec<String> {
     // Start at the end, keep colors, and don't wrap long lines.
     vec!["less".into(), "+G".into(), "-R".into(), "-S".into()]
+}
+
+fn default_notify_on_command_finish_after_secs() -> f64 {
+    10.0
 }
 
 fn default_bell_on_tab() -> String {
