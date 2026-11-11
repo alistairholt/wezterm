@@ -316,6 +316,9 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* Pasted text could end bracketed paste early by nesting its end marker
+  (`ESC[201\ESC[201~~`), so the rest of the paste ran as if typed. All
+  bracketed paste markers are now removed from pasted text.
 * macOS: starting `wezterm-gui` with arguments, such as
   `wezterm-gui start`, no longer opens a second window that tries to run
   `start` as a script and closes.

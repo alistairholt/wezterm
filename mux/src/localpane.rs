@@ -446,7 +446,7 @@ impl Pane for LocalPane {
         if self.tmux_domain.lock().is_some() {
             Ok(())
         } else {
-            self.terminal.lock().send_paste(text)
+            self.terminal.lock().send_paste(&strip_paste_brackets(text))
         }
     }
 
@@ -1144,5 +1144,40 @@ impl Drop for LocalPane {
         if let ProcessState::Running { signaller, .. } = &mut *self.process.lock() {
             let _ = signaller.kill();
         }
+    }
+}
+
+/// Remove bracketed paste start and end markers from pasted text.
+/// The terminal removes them once, but removing a marker can join the
+/// text around it into a new one ("\x1b[201\x1b[201~~"), which would
+/// end bracketed paste early and run the rest of the paste as if it
+/// were typed. Keep removing until none are left.
+fn strip_paste_brackets(text: &str) -> std::borrow::Cow<'_, str> {
+    const START: &str = "\x1b[200~";
+    const END: &str = "\x1b[201~";
+    if !text.contains(START) && !text.contains(END) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut text = text.to_string();
+    while text.contains(START) || text.contains(END) {
+        text = text.replace(START, "").replace(END, "");
+    }
+    std::borrow::Cow::Owned(text)
+}
+
+#[cfg(test)]
+mod paste_test {
+    use super::strip_paste_brackets;
+
+    #[test]
+    fn nested_markers_are_removed() {
+        assert_eq!(strip_paste_brackets("plain\ntext"), "plain\ntext");
+        assert_eq!(strip_paste_brackets("a\x1b[201~b"), "ab");
+        // Removing the inner marker once leaves an outer one behind.
+        assert_eq!(strip_paste_brackets("a\x1b[201\x1b[201~~b"), "ab");
+        assert_eq!(
+            strip_paste_brackets("\x1b[20\x1b[200~0\x1b[201\x1b[200~~~x"),
+            "x"
+        );
     }
 }
