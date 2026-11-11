@@ -302,6 +302,10 @@ pub trait WindowOps {
     fn restore(&self) {}
     fn focus(&self) {}
 
+    /// Ask the desktop to draw the user's attention to this app,
+    /// for example by bouncing its Dock icon once.
+    fn request_attention(&self) {}
+
     fn toggle_fullscreen(&self) {}
 
     fn config_did_change(&self, _config: &config::ConfigHandle) {}

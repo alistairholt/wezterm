@@ -139,6 +139,9 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* [window_alert_on_bell](config/lua/config/window_alert_on_bell.md)
+  bounces the Dock icon when a bell rings while WezTerm is in the
+  background, as kitty does. On by default.
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.
