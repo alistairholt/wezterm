@@ -27,6 +27,71 @@ const DIVIDER: &[Poly] = &[Poly {
     style: PolyStyle::Fill,
 }];
 
+/// Replaces each "│" in a status element's text with a divider line like
+/// the ones between tabs, in that text's color, and centres the text and
+/// the lines on each other.
+fn status_dividers(
+    mut elem: Element,
+    font: &Rc<LoadedFont>,
+    height: Dimension,
+    cell_width: f32,
+) -> Element {
+    let kids = match elem.content {
+        ElementContent::Children(kids) => kids,
+        other => {
+            elem.content = other;
+            return elem;
+        }
+    };
+    let mut out = vec![];
+    for kid in kids {
+        let text = match &kid.content {
+            ElementContent::Text(t) if t.contains('│') => t.clone(),
+            _ => {
+                out.push(kid.vertical_align(VerticalAlign::Middle));
+                continue;
+            }
+        };
+        let colors = kid.colors.clone();
+        for (i, part) in text.split('│').enumerate() {
+            if i > 0 {
+                // Keep about the width of the glyph it replaces.
+                let side = Dimension::Pixels(((cell_width - 1.) / 2.).max(0.).floor());
+                out.push(
+                    Element::new(
+                        font,
+                        ElementContent::Poly {
+                            line_width: 1,
+                            poly: SizedPoly {
+                                poly: DIVIDER,
+                                width: Dimension::Pixels(1.),
+                                height,
+                            },
+                        },
+                    )
+                    .vertical_align(VerticalAlign::Middle)
+                    .margin(BoxDimension {
+                        left: side,
+                        right: side,
+                        top: Dimension::Pixels(0.),
+                        bottom: Dimension::Pixels(0.),
+                    })
+                    .colors(colors.clone()),
+                );
+            }
+            if !part.is_empty() {
+                out.push(
+                    Element::new(font, ElementContent::Text(part.to_string()))
+                        .vertical_align(VerticalAlign::Middle)
+                        .colors(colors.clone()),
+                );
+            }
+        }
+    }
+    elem.content = ElementContent::Children(out);
+    elem
+}
+
 /// The divider's height as a fraction of the tab bar's.
 const DIVIDER_HEIGHT: f32 = 0.6;
 
@@ -511,10 +576,21 @@ impl crate::TermWindow {
 
         let native_buttons_shown = self.native_traffic_lights_shown();
 
+        // In Flat and Capsule, a "│" in the status is drawn as the same
+        // short line as the dividers between tabs, in the color it was given.
+        let divider_height = Dimension::Pixels((tab_bar_height * DIVIDER_HEIGHT).round());
+        let status_elem = |item: &TabEntry| -> Element {
+            let elem = item_to_elem(item);
+            if style == TabStyle::Fancy {
+                return elem;
+            }
+            status_dividers(elem, &font, divider_height, metrics.cell_size.width as f32)
+        };
+
         for item in items {
             match item.item {
-                TabBarItem::LeftStatus => left_status.push(item_to_elem(item)),
-                TabBarItem::None | TabBarItem::RightStatus => right_eles.push(item_to_elem(item)),
+                TabBarItem::LeftStatus => left_status.push(status_elem(item)),
+                TabBarItem::None | TabBarItem::RightStatus => right_eles.push(status_elem(item)),
                 TabBarItem::WindowButton(_) => {
                     if self.config.integrated_title_button_alignment
                         == IntegratedTitleButtonAlignment::Left

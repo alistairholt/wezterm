@@ -59,6 +59,10 @@ Flat and Capsule tabs take their colors from
   the close button is a small X in the tab's text color. Under the mouse
   it gets a rounded square behind it, in that color at low opacity.
 
+In the Flat and Capsule styles, a `│` in the left or right status is drawn
+as the same line as the dividers between tabs, in the color it was given,
+so status sections can be split the same way as tabs.
+
 A background or foreground color set at the start of the text that
 [format-tab-title](../window-events/format-tab-title.md) returns still
 overrides these.

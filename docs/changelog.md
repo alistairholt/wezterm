@@ -161,7 +161,8 @@ As features stabilize some brief notes about them will accumulate here.
   close button, and only draw `inactive_tab_edge` between two inactive tabs.
 * In the Flat and Capsule tab styles, the left and right status sit in the
   middle of the bar, one line tall, so they line up with the tabs at any
-  font size and a `│` in them is a line tall rather than the bar's height.
+  font size. A `│` in the status is drawn as the same short line as the
+  dividers between tabs, in the color it was given.
 * Right-click shows a context menu, like Terminal.app's: open or copy a
   link, copy, paste, select all, split the pane, clear the scrollback
   or close the pane. See
