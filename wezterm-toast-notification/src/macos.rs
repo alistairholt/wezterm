@@ -5,7 +5,7 @@ use block2::{Block, RcBlock};
 use objc2::rc::Retained;
 use objc2::runtime::{Bool, NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, AllocAnyThread};
-use objc2_foundation::{ns_string, NSArray, NSDictionary, NSError, NSSet, NSString};
+use objc2_foundation::{ns_string, NSArray, NSBundle, NSDictionary, NSError, NSSet, NSString};
 use objc2_user_notifications::{
     UNAuthorizationOptions, UNMutableNotificationContent, UNNotification, UNNotificationAction,
     UNNotificationActionOptions, UNNotificationCategory, UNNotificationCategoryOptions,
@@ -97,7 +97,24 @@ impl Drop for NotifDelegate {
 const CENTER: LazyLock<Retained<UNUserNotificationCenter>> =
     LazyLock::new(UNUserNotificationCenter::currentNotificationCenter);
 
+/// UNUserNotificationCenter raises an Objective-C exception, which aborts
+/// the process, when the executable is not inside an app bundle (for
+/// example `cargo run`). A bare binary can still report a bundle identifier
+/// from an embedded Info.plist, so check that the main bundle is a `.app`.
+fn have_bundle() -> bool {
+    static HAVE: LazyLock<bool> = LazyLock::new(|| {
+        NSBundle::mainBundle()
+            .bundlePath()
+            .to_string()
+            .ends_with(".app")
+    });
+    *HAVE
+}
+
 pub fn initialize() {
+    if !have_bundle() {
+        return;
+    }
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         CENTER.requestAuthorizationWithOptions_completionHandler(
@@ -149,6 +166,13 @@ pub fn initialize() {
 }
 
 pub fn show_notif(toast: ToastNotification) -> Result<(), Box<dyn std::error::Error>> {
+    if !have_bundle() {
+        return Err(format!(
+            "not running from an app bundle, so cannot show: {}: {}",
+            toast.title, toast.message
+        )
+        .into());
+    }
     initialize();
     unsafe {
         log::debug!("show_notif center.delegate is {:?}", CENTER.delegate());
