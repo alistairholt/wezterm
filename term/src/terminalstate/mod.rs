@@ -181,6 +181,11 @@ impl DerefMut for ScreenOrAlt {
 }
 
 impl ScreenOrAlt {
+    fn refresh_config(&mut self) {
+        self.screen.refresh_config();
+        self.alt_screen.refresh_config();
+    }
+
     pub fn new(
         size: TerminalSize,
         config: &Arc<dyn TerminalConfiguration>,
@@ -413,6 +418,12 @@ pub struct TerminalState {
     /// applied to lines.
     /// If none, then the default value specified by the config is used.
     bidi_hint: Option<ParagraphDirectionHint>,
+
+    /// Config values read on every line or print, copied once per batch
+    /// of output by refresh_config_cache: reading the GUI config takes a
+    /// lock and clones an Arc.
+    config_bidi_mode: BidiMode,
+    pub(crate) config_normalize_nfc: bool,
 }
 
 #[derive(Debug)]
@@ -527,7 +538,9 @@ impl TerminalState {
     ) -> TerminalState {
         let writer = BufWriter::new(ThreadedWriter::new(writer));
         let seqno = 1;
-        let screen = ScreenOrAlt::new(size, &config, seqno, config.bidi_mode());
+        let config_bidi_mode = config.bidi_mode();
+        let config_normalize_nfc = config.normalize_output_to_unicode_nfc();
+        let screen = ScreenOrAlt::new(size, &config, seqno, config_bidi_mode);
 
         let color_map = default_color_map();
 
@@ -603,8 +616,19 @@ impl TerminalState {
             focused: true,
             bidi_enabled: None,
             bidi_hint: None,
+            config_bidi_mode,
+            config_normalize_nfc,
             progress: Progress::default(),
         }
+    }
+
+    /// Copies the config values used on hot paths. Called at the start of
+    /// each batch of output and when the config is replaced, so a config
+    /// reload takes effect from the next batch.
+    pub(crate) fn refresh_config_cache(&mut self) {
+        self.config_bidi_mode = self.config.bidi_mode();
+        self.config_normalize_nfc = self.config.normalize_output_to_unicode_nfc();
+        self.screen.refresh_config();
     }
 
     pub fn enable_conpty_quirks(&mut self) {
@@ -622,6 +646,7 @@ impl TerminalState {
 
     pub fn set_config(&mut self, config: Arc<dyn TerminalConfiguration>) {
         self.config = config;
+        self.refresh_config_cache();
     }
 
     pub fn get_config(&self) -> Arc<dyn TerminalConfiguration> {
@@ -2298,7 +2323,7 @@ impl TerminalState {
     }
 
     fn get_bidi_mode(&self) -> BidiMode {
-        let mut mode = self.config.bidi_mode();
+        let mut mode = self.config_bidi_mode;
         if let Some(enabled) = &self.bidi_enabled {
             mode.enabled = *enabled;
         }

@@ -96,6 +96,7 @@ fn ascii_run_len(s: &str) -> usize {
 
 impl<'a> Performer<'a> {
     pub fn new(state: &'a mut TerminalState) -> Self {
+        state.refresh_config_cache();
         Self {
             state,
             print: String::new(),
@@ -161,9 +162,7 @@ impl<'a> Performer<'a> {
         let seqno = self.seqno;
         let mut p = std::mem::take(&mut self.print);
         let normalized: String;
-        let text = if self.config.normalize_output_to_unicode_nfc()
-            && is_nfc_quick(p.chars()) != IsNormalized::Yes
-        {
+        let text = if self.config_normalize_nfc && is_nfc_quick(p.chars()) != IsNormalized::Yes {
             normalized = p.as_str().nfc().collect();
             normalized.as_str()
         } else {
@@ -388,8 +387,13 @@ impl<'a> Performer<'a> {
         match action {
             Action::Print(c) => self.print(c),
             Action::PrintString(s) => {
-                for c in s.chars() {
-                    self.print(c)
+                if let Some(title) = self.accumulating_title.as_mut() {
+                    title.push_str(&s);
+                } else if self.print.is_empty() {
+                    // Take the string rather than copying it
+                    self.print = s;
+                } else {
+                    self.print.push_str(&s);
                 }
             }
             Action::Control(code) => self.control(code),

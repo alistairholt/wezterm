@@ -36,6 +36,11 @@ pub struct Screen {
     /// that we're the primary rather than the alternate screen.
     allow_scrollback: bool,
 
+    /// scrollback_size(&config, allow_scrollback), read once per batch of
+    /// output by refresh_config rather than on every line feed: reading
+    /// the GUI config takes a lock.
+    scrollback_limit: usize,
+
     pub(crate) keyboard_stack: Vec<KeyboardEncoding>,
 
     /// Physical, visible height of the screen (not including scrollback)
@@ -69,8 +74,8 @@ impl Screen {
         let physical_rows = size.rows.max(1);
         let physical_cols = size.cols.max(1);
 
-        let mut lines =
-            VecDeque::with_capacity(physical_rows + scrollback_size(config, allow_scrollback));
+        let scrollback_limit = scrollback_size(config, allow_scrollback);
+        let mut lines = VecDeque::with_capacity(physical_rows + scrollback_limit);
         for _ in 0..physical_rows {
             let mut line = Line::new(seqno);
             bidi_mode.apply_to_line(&mut line, seqno);
@@ -81,6 +86,7 @@ impl Screen {
             lines,
             config: Arc::clone(config),
             allow_scrollback,
+            scrollback_limit,
             physical_rows,
             physical_cols,
             stable_row_index_offset: 0,
@@ -95,7 +101,12 @@ impl Screen {
     }
 
     fn scrollback_size(&self) -> usize {
-        scrollback_size(&self.config, self.allow_scrollback)
+        self.scrollback_limit
+    }
+
+    /// Re-reads the config values this screen caches.
+    pub(crate) fn refresh_config(&mut self) {
+        self.scrollback_limit = scrollback_size(&self.config, self.allow_scrollback);
     }
 
     fn rewrap_lines(

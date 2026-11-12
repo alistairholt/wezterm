@@ -95,7 +95,7 @@ fn main() {
         let start = Instant::now();
         for chunk in data.chunks(CHUNK) {
             let mut actions = vec![];
-            parser.parse(chunk, |action| action.append_to(&mut actions));
+            parser.parse_with_print_runs(chunk, |action| action.append_to(&mut actions));
             term.perform_actions(actions);
         }
         let elapsed = start.elapsed();

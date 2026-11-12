@@ -92,7 +92,20 @@ impl Parser {
         return tmux_parser.advance_bytes(bytes);
     }
 
-    pub fn parse<F: FnMut(Action)>(&mut self, bytes: &[u8], mut callback: F) {
+    pub fn parse<F: FnMut(Action)>(&mut self, bytes: &[u8], callback: F) {
+        self.parse_impl(bytes, callback, false)
+    }
+
+    /// Like `parse`, but a run of printable ASCII may be delivered as a
+    /// single `Action::PrintString` rather than one `Action::Print` per
+    /// character. Callers must handle `PrintString` (as `Action::append_to`
+    /// and the terminal model do); in exchange, plain text parses several
+    /// times faster.
+    pub fn parse_with_print_runs<F: FnMut(Action)>(&mut self, bytes: &[u8], callback: F) {
+        self.parse_impl(bytes, callback, true)
+    }
+
+    fn parse_impl<F: FnMut(Action)>(&mut self, bytes: &[u8], mut callback: F, print_runs: bool) {
         #[cfg(feature = "tmux_cc")]
         let is_tmux_mode: bool = self.state.borrow().tmux_state.is_some();
         #[cfg(feature = "tmux_cc")]
@@ -111,6 +124,7 @@ impl Parser {
                     let mut perform = Performer {
                         callback: &mut callback,
                         state: &mut parser_state,
+                        print_runs,
                     };
                     self.state_machine
                         .parse(unparsed_str.as_bytes(), &mut perform);
@@ -122,6 +136,7 @@ impl Parser {
         let mut perform = Performer {
             callback: &mut callback,
             state: &mut self.state.borrow_mut(),
+            print_runs,
         };
         self.state_machine.parse(bytes, &mut perform);
     }
@@ -147,6 +162,7 @@ impl Parser {
                     *first.borrow_mut() = Some(action);
                 },
                 state: &mut self.state.borrow_mut(),
+                print_runs: false,
             };
             for (idx, b) in bytes.iter().enumerate() {
                 self.state_machine.parse_byte(*b, &mut perform);
@@ -184,6 +200,7 @@ impl Parser {
                 &mut Performer {
                     callback: &mut |action| actions.push(action),
                     state: &mut self.state.borrow_mut(),
+                    print_runs: false,
                 },
             );
             if !actions.is_empty() && self.state_machine.is_ground() {
@@ -199,6 +216,8 @@ impl Parser {
 struct Performer<'a, F: FnMut(Action) + 'a> {
     callback: &'a mut F,
     state: &'a mut ParseState,
+    /// Deliver runs of printable ASCII as one PrintString
+    print_runs: bool,
 }
 
 fn is_short_dcs(intermediates: &[u8], byte: u8) -> bool {
@@ -213,6 +232,16 @@ fn is_short_dcs(intermediates: &[u8], byte: u8) -> bool {
 impl<'a, F: FnMut(Action)> VTActor for Performer<'a, F> {
     fn print(&mut self, c: char) {
         (self.callback)(Action::Print(c));
+    }
+
+    fn print_str(&mut self, s: &str) {
+        if self.print_runs {
+            (self.callback)(Action::PrintString(s.to_string()));
+        } else {
+            for c in s.chars() {
+                (self.callback)(Action::Print(c));
+            }
+        }
     }
 
     fn execute_c0_or_c1(&mut self, byte: u8) {
@@ -367,6 +396,28 @@ mod test {
             write!(res, "{}", s).unwrap();
         }
         String::from_utf8(res).unwrap()
+    }
+
+    /// `parse_with_print_runs` emits a `PrintString` per run of ASCII
+    /// instead of a `Print` per character. Once merged with `append_to`
+    /// (as the terminal does) the result must match `parse`, wherever the
+    /// input is split into chunks.
+    #[test]
+    fn print_runs_merge_to_the_same_actions() {
+        let input: &[u8] = b"hello world\r\n\x1b[32mgreen\x1b[0m x\x7fy \
+            caf\xc3\xa9 run\x1b]2;title text\x1b\\ more text\x1b[?25l end";
+
+        let mut parser = Parser::new();
+        let mut expected = vec![];
+        parser.parse(input, |action| action.append_to(&mut expected));
+
+        for split in 0..=input.len() {
+            let mut parser = Parser::new();
+            let mut actions = vec![];
+            parser.parse_with_print_runs(&input[..split], |action| action.append_to(&mut actions));
+            parser.parse_with_print_runs(&input[split..], |action| action.append_to(&mut actions));
+            assert_eq!(actions, expected, "split at {split}");
+        }
     }
 
     // <https://github.com/markbt/streampager/issues/57>
