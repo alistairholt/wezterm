@@ -6,10 +6,11 @@ use crate::termwindow::render::corners::*;
 use crate::termwindow::render::window_buttons::window_button_element;
 use crate::termwindow::{UIItem, UIItemType};
 use crate::utilsprites::RenderMetrics;
-use config::{Dimension, DimensionContext, FancyTabStyle, TabBarColors};
+use config::{Dimension, DimensionContext, TabBarColors, TabStyle};
 use std::rc::Rc;
 use wezterm_font::LoadedFont;
 use wezterm_term::color::{ColorAttribute, ColorPalette};
+use window::color::LinearRgba;
 use window::{IntegratedTitleButtonAlignment, IntegratedTitleButtonStyle};
 
 const X_BUTTON: &[Poly] = &[
@@ -95,7 +96,7 @@ impl crate::TermWindow {
             self.config.window_frame.inactive_titlebar_bg
         }
         .to_linear();
-        let style = self.config.fancy_tab_style;
+        let style = self.config.tab_style();
         let active_idx = items.iter().find_map(|item| match item.item {
             TabBarItem::Tab {
                 tab_idx,
@@ -107,23 +108,18 @@ impl crate::TermWindow {
             .iter()
             .filter(|item| matches!(item.item, TabBarItem::Tab { .. }))
             .count();
-        // DEBUG knobs for tuning Flat and Capsule tabs, read from the
-        // environment: WEZTERM_TAB_PAD_X and WEZTERM_TAB_PAD_Y (cells),
-        // WEZTERM_TAB_RADIUS (corner radius as a fraction of the tab's
-        // height; 0.5 makes a full capsule) and WEZTERM_TAB_CORNER
-        // ("round" for circular corners, else superellipse).
-        let knob = |name: &str, default: f32| {
-            std::env::var(name)
-                .ok()
-                .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(default)
-        };
-        let pad_x = knob("WEZTERM_TAB_PAD_X", 0.75);
-        let pad_y = knob("WEZTERM_TAB_PAD_Y", 0.25);
-        let radius_frac = knob("WEZTERM_TAB_RADIUS", 0.5).clamp(0., 0.5);
-        let round_corners = std::env::var("WEZTERM_TAB_CORNER").as_deref() == Ok("round");
-        let tab_height = metrics.cell_size.height as f32 * (1. + 2. * pad_y);
-        let pill_radius = Dimension::Pixels(tab_height * radius_frac);
+        // Flat and Capsule tabs: padding and the pill's corner radius come
+        // from window_frame. The radius is a fraction of the tab's height.
+        let frame = &self.config.window_frame;
+        let pad_x = frame.tab_padding_x;
+        let pad_y = frame.tab_padding_y;
+        let pad_y_px = pad_y.evaluate_as_pixels(DimensionContext {
+            dpi: self.dimensions.dpi as f32,
+            pixel_max: self.dimensions.pixel_height as f32,
+            pixel_cell: metrics.cell_size.height as f32,
+        });
+        let tab_height = metrics.cell_size.height as f32 + 2. * pad_y_px;
+        let pill_radius = Dimension::Pixels(tab_height * frame.tab_corner_radius.clamp(0., 0.5));
 
         let tab_vertical_alignment = if self.config.tab_bar_at_bottom {
             VerticalAlign::Top
@@ -208,12 +204,12 @@ impl crate::TermWindow {
                     bg: new_tab_hover.bg_color.to_linear().into(),
                     text: new_tab_hover.fg_color.to_linear().into(),
                 })),
-                TabBarItem::Tab { tab_idx, active } if style != FancyTabStyle::Default => {
-                    let pill = style == FancyTabStyle::Capsule && active;
+                TabBarItem::Tab { tab_idx, active } if style != TabStyle::Fancy => {
+                    let pill = style == TabStyle::Capsule && active;
                     // A divider on the right edge, between this tab and the
                     // next; none after the last tab or beside the pill.
-                    let beside_pill = style == FancyTabStyle::Capsule
-                        && (active || active_idx == Some(tab_idx + 1));
+                    let beside_pill =
+                        style == TabStyle::Capsule && (active || active_idx == Some(tab_idx + 1));
                     let divider = tab_idx + 1 < tab_count && !beside_pill;
                     let edge = colors.inactive_tab_edge().to_linear();
                     let (bg, fg) = if active {
@@ -250,10 +246,10 @@ impl crate::TermWindow {
                         .item_type(UIItemType::TabBar(item.item.clone()))
                         .margin(BoxDimension::new(Dimension::Cells(0.)))
                         .padding(BoxDimension {
-                            left: Dimension::Cells(pad_x),
-                            right: Dimension::Cells(pad_x),
-                            top: Dimension::Cells(pad_y),
-                            bottom: Dimension::Cells(pad_y),
+                            left: pad_x,
+                            right: pad_x,
+                            top: pad_y,
+                            bottom: pad_y,
                         })
                         .border(BoxDimension {
                             left: Dimension::Pixels(0.),
@@ -266,26 +262,10 @@ impl crate::TermWindow {
                         })
                         .border_corners(if pill {
                             Some(Corners {
-                                top_left: rounded(if round_corners {
-                                    TOP_LEFT_ROUNDED_CORNER
-                                } else {
-                                    TOP_LEFT_SUPERELLIPSE_CORNER
-                                }),
-                                top_right: rounded(if round_corners {
-                                    TOP_RIGHT_ROUNDED_CORNER
-                                } else {
-                                    TOP_RIGHT_SUPERELLIPSE_CORNER
-                                }),
-                                bottom_left: rounded(if round_corners {
-                                    BOTTOM_LEFT_ROUNDED_CORNER
-                                } else {
-                                    BOTTOM_LEFT_SUPERELLIPSE_CORNER
-                                }),
-                                bottom_right: rounded(if round_corners {
-                                    BOTTOM_RIGHT_ROUNDED_CORNER
-                                } else {
-                                    BOTTOM_RIGHT_SUPERELLIPSE_CORNER
-                                }),
+                                top_left: rounded(TOP_LEFT_SUPERELLIPSE_CORNER),
+                                top_right: rounded(TOP_RIGHT_SUPERELLIPSE_CORNER),
+                                bottom_left: rounded(BOTTOM_LEFT_SUPERELLIPSE_CORNER),
+                                bottom_right: rounded(BOTTOM_RIGHT_SUPERELLIPSE_CORNER),
                             })
                         } else {
                             None
@@ -517,7 +497,7 @@ impl crate::TermWindow {
         // Reserve space for the native titlebar buttons. Flat and Capsule
         // reserve it in points below instead, so it doesn't depend on the
         // font's cell width.
-        if style == FancyTabStyle::Default
+        if style == TabStyle::Fancy
             && self
                 .config
                 .window_decorations
@@ -556,7 +536,28 @@ impl crate::TermWindow {
                         ElementContent::Poly { .. } => unreachable!(),
                         ElementContent::Children(mut kids) => {
                             if self.config.show_close_tab_button_in_tabs {
-                                kids.push(make_x_button(&font, &metrics, &colors, tab_idx, active));
+                                kids.push(if style == TabStyle::Fancy {
+                                    make_x_button(&font, &metrics, &colors, tab_idx, active)
+                                } else {
+                                    let tab_bg = if style == TabStyle::Capsule && active {
+                                        colors.active_tab().bg_color.to_linear()
+                                    } else {
+                                        bar_bg
+                                    };
+                                    let fg = if active {
+                                        colors.active_tab().fg_color
+                                    } else {
+                                        colors.inactive_tab().fg_color
+                                    };
+                                    make_flat_x_button(
+                                        &font,
+                                        &metrics,
+                                        tab_idx,
+                                        tab_bg,
+                                        fg.to_linear(),
+                                        colors.active_tab().fg_color.to_linear(),
+                                    )
+                                });
                             }
                             ElementContent::Children(kids)
                         }
@@ -593,7 +594,7 @@ impl crate::TermWindow {
         const LIGHTS_END: f32 = 69.;
         const LIGHTS_GAP: f32 = 9.;
         let points = |pt: f32| Dimension::Pixels(pt * self.dimensions.dpi as f32 / 72.);
-        let left_padding = if style != FancyTabStyle::Default {
+        let left_padding = if style != TabStyle::Fancy {
             points(if native_buttons_shown {
                 LIGHTS_END + LIGHTS_GAP
             } else {
@@ -618,7 +619,7 @@ impl crate::TermWindow {
             Element::new(&font, ElementContent::Children(left_eles))
                 // Flat and Capsule tabs sit in the middle of the bar, level
                 // with the traffic lights; Default tabs join the pane.
-                .vertical_align(if style == FancyTabStyle::Default {
+                .vertical_align(if style == TabStyle::Fancy {
                     tab_vertical_alignment
                 } else {
                     VerticalAlign::Middle
@@ -699,6 +700,81 @@ impl crate::TermWindow {
 
         Ok(ui_items)
     }
+}
+
+/// The close button for Flat and Capsule tabs: a small X in a square with
+/// superellipse corners, which shows a faint background under the mouse.
+fn make_flat_x_button(
+    font: &Rc<LoadedFont>,
+    metrics: &RenderMetrics,
+    tab_idx: usize,
+    tab_bg: LinearRgba,
+    fg: LinearRgba,
+    hover_fg: LinearRgba,
+) -> Element {
+    let cell_h = metrics.cell_size.height as f32;
+    // The X is about a third of the line height, with as much space again
+    // on each side, so the hover square is about the line's height.
+    let x_size = (cell_h * 0.32).round();
+    let pad = Dimension::Pixels(((cell_h - x_size) / 2.).floor());
+    let radius = Dimension::Pixels((cell_h * 0.3).round());
+    // The hover background is the text color at a low opacity over the tab.
+    let mix = |a: f32, b: f32| a + (b - a) * 0.15;
+    let hover_bg = LinearRgba(
+        mix(tab_bg.0, hover_fg.0),
+        mix(tab_bg.1, hover_fg.1),
+        mix(tab_bg.2, hover_fg.2),
+        tab_bg.3,
+    );
+    let rounded = |poly| SizedPoly {
+        width: radius,
+        height: radius,
+        poly,
+    };
+    let border = |c: LinearRgba| BorderColor {
+        left: c,
+        right: c,
+        top: c,
+        bottom: c,
+    };
+    Element::new(
+        &font,
+        ElementContent::Poly {
+            line_width: metrics.underline_height.max(2),
+            poly: SizedPoly {
+                poly: X_BUTTON,
+                width: Dimension::Pixels(x_size),
+                height: Dimension::Pixels(x_size),
+            },
+        },
+    )
+    .zindex(1)
+    .vertical_align(VerticalAlign::Middle)
+    .float(Float::Right)
+    .item_type(UIItemType::CloseTab(tab_idx))
+    .border_corners(Some(Corners {
+        top_left: rounded(TOP_LEFT_SUPERELLIPSE_CORNER),
+        top_right: rounded(TOP_RIGHT_SUPERELLIPSE_CORNER),
+        bottom_left: rounded(BOTTOM_LEFT_SUPERELLIPSE_CORNER),
+        bottom_right: rounded(BOTTOM_RIGHT_SUPERELLIPSE_CORNER),
+    }))
+    .colors(ElementColors {
+        border: border(tab_bg),
+        bg: tab_bg.into(),
+        text: fg.into(),
+    })
+    .hover_colors(Some(ElementColors {
+        border: border(hover_bg),
+        bg: hover_bg.into(),
+        text: hover_fg.into(),
+    }))
+    .padding(BoxDimension::new(pad))
+    .margin(BoxDimension {
+        left: Dimension::Cells(0.5),
+        right: Dimension::Cells(0.),
+        top: Dimension::Cells(0.),
+        bottom: Dimension::Cells(0.),
+    })
 }
 
 fn make_x_button(

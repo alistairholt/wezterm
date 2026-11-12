@@ -143,9 +143,14 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
-* [fancy_tab_style](config/lua/config/fancy_tab_style.md) draws the fancy
-  tab bar's tabs flat with thin dividers, or with the active tab as a
-  rounded pill, without needing a `format-tab-title` handler to fake it.
+* [tab_style](config/lua/config/tab_style.md) picks the tab bar's look in
+  one setting: `"Retro"`, `"Fancy"`, or the new `"Flat"` (thin dividers
+  between tabs) and `"Capsule"` (the active tab as a rounded pill), without
+  needing a `format-tab-title` handler to fake them.
+  [window_frame](config/lua/config/window_frame.md) gains `tab_padding_x`,
+  `tab_padding_y` and `tab_corner_radius` for them.
+  [use_fancy_tab_bar](config/lua/config/use_fancy_tab_bar.md) still works
+  when `tab_style` isn't set.
 * Right-click shows a context menu, like Terminal.app's: open or copy a
   link, copy, paste, select all, split the pane, clear the scrollback
   or close the pane. See

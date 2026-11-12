@@ -516,14 +516,16 @@ pub struct Config {
     /// active tab.  Clicking on a tab activates it.
     #[dynamic(default = "default_true")]
     pub enable_tab_bar: bool,
+    /// Older switch between the fancy and retro tab bars. `tab_style`
+    /// takes its place; this is only read when `tab_style` isn't set.
+    /// Use `Config::tab_style()` rather than reading it.
     #[dynamic(default = "default_true")]
     pub use_fancy_tab_bar: bool,
 
-    /// How the fancy tab bar draws its tabs: "Default" (rounded tops that
-    /// join the pane), "Flat" (no tab shapes, thin dividers between tabs)
-    /// or "Capsule" (the active tab is a rounded pill).
+    /// How the tab bar looks: "Retro", "Fancy", "Flat" or "Capsule".
+    /// When unset, `use_fancy_tab_bar` picks Fancy or Retro.
     #[dynamic(default)]
-    pub fancy_tab_style: FancyTabStyle,
+    pub tab_style: Option<TabStyle>,
 
     #[dynamic(default)]
     pub tab_bar_at_bottom: bool,
@@ -1040,6 +1042,16 @@ impl Default for Config {
 }
 
 impl Config {
+    /// The tab bar's look: `tab_style` if set, otherwise Fancy or Retro
+    /// from `use_fancy_tab_bar`.
+    pub fn tab_style(&self) -> TabStyle {
+        self.tab_style.unwrap_or(if self.use_fancy_tab_bar {
+            TabStyle::Fancy
+        } else {
+            TabStyle::Retro
+        })
+    }
+
     pub fn load() -> LoadedConfig {
         Self::load_with_overrides(&wezterm_dynamic::Value::default())
     }
@@ -2013,17 +2025,28 @@ fn default_inactive_pane_hsb() -> HsbTransform {
     }
 }
 
-#[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum FancyTabStyle {
-    /// Rounded tab tops, with the active tab joined to the pane below.
-    #[default]
-    Default,
-    /// No tab shapes: tabs sit on the bar, split by thin dividers, and the
-    /// active tab is told apart by its text color.
+#[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabStyle {
+    /// One row of text in the terminal font, styled with tab_bar_style.
+    Retro,
+    /// Drawn with the window_frame font: rounded tab tops, with the active
+    /// tab joined to the pane below.
+    Fancy,
+    /// As Fancy, but with no tab shapes: tabs sit in the middle of the
+    /// bar, split by thin dividers, and the active tab is told apart by
+    /// its text color.
     Flat,
     /// As Flat, but the active tab is a rounded pill in the active tab
     /// color, with no dividers next to it.
     Capsule,
+}
+
+impl TabStyle {
+    /// Whether the tab bar is drawn with the window_frame font and box
+    /// model (every style except Retro).
+    pub fn is_fancy(self) -> bool {
+        self != Self::Retro
+    }
 }
 
 #[derive(FromDynamic, ToDynamic, Clone, Copy, Debug, Default)]
@@ -2512,17 +2535,53 @@ mod appearance_test {
     }
 
     #[test]
-    fn fancy_tab_style_from_config() {
-        use crate::FancyTabStyle;
+    fn tab_style_from_config() {
+        use crate::{Config, TabStyle};
         use wezterm_dynamic::{FromDynamic, FromDynamicOptions, Value};
-        // Config files name the style as a string; leaving it out keeps
-        // the tab shape WezTerm has always drawn.
+        // Config files name the style as a string.
         let parse = |s: &str| {
-            FancyTabStyle::from_dynamic(&Value::String(s.into()), FromDynamicOptions::default())
+            TabStyle::from_dynamic(&Value::String(s.into()), FromDynamicOptions::default())
         };
-        assert_eq!(parse("Flat").unwrap(), FancyTabStyle::Flat);
-        assert_eq!(parse("Capsule").unwrap(), FancyTabStyle::Capsule);
+        assert_eq!(parse("Flat").unwrap(), TabStyle::Flat);
+        assert_eq!(parse("Capsule").unwrap(), TabStyle::Capsule);
         assert!(parse("Pill").is_err());
-        assert_eq!(FancyTabStyle::default(), FancyTabStyle::Default);
+
+        // Without tab_style, use_fancy_tab_bar still picks the bar, so
+        // existing configs keep the bar they had.
+        let mut config = Config::default_config();
+        assert_eq!(config.tab_style(), TabStyle::Fancy);
+        config.use_fancy_tab_bar = false;
+        assert_eq!(config.tab_style(), TabStyle::Retro);
+        // tab_style wins when both are set.
+        config.tab_style = Some(TabStyle::Capsule);
+        assert_eq!(config.tab_style(), TabStyle::Capsule);
+        assert!(config.tab_style().is_fancy());
+    }
+
+    #[test]
+    fn window_frame_tab_settings() {
+        use crate::{Dimension, WindowFrameConfig};
+        use wezterm_dynamic::{FromDynamic, FromDynamicOptions, Value};
+        // Padding takes the usual unit strings; the defaults are what the
+        // Flat and Capsule styles were tuned with.
+        let frame = WindowFrameConfig::default();
+        assert_eq!(frame.tab_padding_x, Dimension::Cells(0.75));
+        assert_eq!(frame.tab_padding_y, Dimension::Cells(0.25));
+        assert_eq!(frame.tab_corner_radius, 0.5);
+
+        let mut obj = wezterm_dynamic::Object::default();
+        obj.insert(
+            Value::String("tab_padding_x".into()),
+            Value::String("6pt".into()),
+        );
+        obj.insert(
+            Value::String("tab_corner_radius".into()),
+            Value::F64(0.3.into()),
+        );
+        let frame =
+            WindowFrameConfig::from_dynamic(&Value::Object(obj), FromDynamicOptions::default())
+                .unwrap();
+        assert_eq!(frame.tab_padding_x, Dimension::Points(6.));
+        assert_eq!(frame.tab_corner_radius, 0.3);
     }
 }

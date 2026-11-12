@@ -14,7 +14,7 @@ impl crate::TermWindow {
         // to advance the frame.
         self.update_next_frame_time(self.tab_bar.next_progress_frame_due());
 
-        if self.config.use_fancy_tab_bar {
+        if self.config.tab_style().is_fancy() {
             if self.fancy_tab_bar.is_none() {
                 let palette = self.palette().clone();
                 let tab_bar = self.build_fancy_tab_bar(&palette)?;
@@ -111,7 +111,7 @@ impl crate::TermWindow {
         fontconfig: &wezterm_font::FontConfiguration,
         render_metrics: &RenderMetrics,
     ) -> anyhow::Result<f32> {
-        if config.use_fancy_tab_bar {
+        if config.tab_style().is_fancy() {
             let font = fontconfig.title_font()?;
             let height = font.metrics().cell_height.get() as f32 * 1.75;
             Ok(height
@@ -125,7 +125,7 @@ impl crate::TermWindow {
     /// On macOS the bar is at least twice as tall as the traffic lights'
     /// center is from the top of the window, so the lights have equal space
     /// above and below them. The same with or without the lights and for
-    /// every fancy_tab_style, so the bar doesn't change height and tabs
+    /// every tab_style, so the bar doesn't change height and tabs
     /// aren't squeezed against its edges.
     fn traffic_light_bar_height(
         _config: &ConfigHandle,
