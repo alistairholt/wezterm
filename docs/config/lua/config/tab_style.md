@@ -28,8 +28,8 @@ config.tab_style = 'Capsule'
 
 ## Padding and corners
 
-`window_frame` sets the space around each Flat or Capsule tab's title and
-how round the Capsule pill is:
+`window_frame` sets the space around each tab's title (`tab_padding_x`
+applies to Fancy tabs too) and how round the Capsule pill is:
 
 ```lua
 config.window_frame = {

@@ -155,6 +155,10 @@ As features stabilize some brief notes about them will accumulate here.
   tall enough for the traffic lights in every tab style, and tabs start a
   fixed gap after them rather than a font-dependent one. Fancy tabs' top
   corners are no longer stretched.
+* The retro tab bar uses the `window_frame` title bar color when
+  `colors.tab_bar.background` isn't set, like the fancy styles, instead of
+  a fixed grey. Fancy tabs use `window_frame.tab_padding_x` and the smaller
+  close button, and only draw `inactive_tab_edge` between two inactive tabs.
 * Right-click shows a context menu, like Terminal.app's: open or copy a
   link, copy, paste, select all, split the pane, clear the scrollback
   or close the pane. See

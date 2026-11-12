@@ -2052,7 +2052,7 @@ impl TermWindow {
             },
             &tabs,
             &panes,
-            self.config.resolved_palette.tab_bar.as_ref(),
+            Some(&self.retro_tab_bar_colors()),
             &self.config,
             &self.left_status,
             &self.right_status,
