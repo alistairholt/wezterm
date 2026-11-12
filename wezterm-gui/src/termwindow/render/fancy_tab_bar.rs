@@ -310,8 +310,8 @@ impl crate::TermWindow {
                         }
                     })
                     .padding(BoxDimension {
-                        left: Dimension::Cells(0.5),
-                        right: Dimension::Cells(0.5),
+                        left: pad_x,
+                        right: pad_x,
                         top: Dimension::Cells(0.25),
                         bottom: Dimension::Cells(0.25),
                     })
@@ -362,7 +362,7 @@ impl crate::TermWindow {
                             .to_linear()
                             .into(),
                     }),
-                TabBarItem::Tab { .. } => element
+                TabBarItem::Tab { tab_idx, .. } => element
                     .vertical_align(tab_vertical_alignment)
                     .item_type(UIItemType::TabBar(item.item.clone()))
                     .margin(if is_bottom {
@@ -381,8 +381,8 @@ impl crate::TermWindow {
                         }
                     })
                     .padding(BoxDimension {
-                        left: Dimension::Cells(0.5),
-                        right: Dimension::Cells(0.5),
+                        left: pad_x,
+                        right: pad_x,
                         top: Dimension::Cells(0.25),
                         bottom: Dimension::Cells(0.25),
                     })
@@ -439,7 +439,14 @@ impl crate::TermWindow {
                         let bg = bg_color
                             .unwrap_or_else(|| inactive_tab.bg_color.into())
                             .to_linear();
-                        let edge = colors.inactive_tab_edge().to_linear();
+                        // An edge only between two inactive tabs: none
+                        // after the last tab or next to the active one,
+                        // which stands out on its own.
+                        let edge = if tab_idx + 1 < tab_count && active_idx != Some(tab_idx + 1) {
+                            colors.inactive_tab_edge().to_linear()
+                        } else {
+                            bg
+                        };
                         ElementColors {
                             border: BorderColor {
                                 left: bg,
@@ -516,10 +523,14 @@ impl crate::TermWindow {
                         ElementContent::Poly { .. } => unreachable!(),
                         ElementContent::Children(mut kids) => {
                             if self.config.show_close_tab_button_in_tabs {
-                                kids.push(if style == TabStyle::Fancy {
-                                    make_x_button(&font, &metrics, &colors, tab_idx, active)
-                                } else {
-                                    let tab_bg = if style == TabStyle::Capsule && active {
+                                kids.push({
+                                    let tab_bg = if style == TabStyle::Fancy {
+                                        if active {
+                                            colors.active_tab().bg_color.to_linear()
+                                        } else {
+                                            colors.inactive_tab().bg_color.to_linear()
+                                        }
+                                    } else if style == TabStyle::Capsule && active {
                                         colors.active_tab().bg_color.to_linear()
                                     } else {
                                         bar_bg
@@ -529,7 +540,7 @@ impl crate::TermWindow {
                                     } else {
                                         colors.inactive_tab().fg_color
                                     };
-                                    make_flat_x_button(
+                                    make_x_button(
                                         &font,
                                         &metrics,
                                         tab_idx,
@@ -703,9 +714,9 @@ impl crate::TermWindow {
     }
 }
 
-/// The close button for Flat and Capsule tabs: a small X in a square with
+/// The close button for fancy tabs: a small X in a square with
 /// superellipse corners, which shows a faint background under the mouse.
-fn make_flat_x_button(
+fn make_x_button(
     font: &Rc<LoadedFont>,
     metrics: &RenderMetrics,
     tab_idx: usize,
@@ -770,66 +781,6 @@ fn make_flat_x_button(
         text: hover_fg.into(),
     }))
     .padding(BoxDimension::new(pad))
-    .margin(BoxDimension {
-        left: Dimension::Cells(0.5),
-        right: Dimension::Cells(0.),
-        top: Dimension::Cells(0.),
-        bottom: Dimension::Cells(0.),
-    })
-}
-
-fn make_x_button(
-    font: &Rc<LoadedFont>,
-    metrics: &RenderMetrics,
-    colors: &TabBarColors,
-    tab_idx: usize,
-    active: bool,
-) -> Element {
-    Element::new(
-        &font,
-        ElementContent::Poly {
-            line_width: metrics.underline_height.max(2),
-            poly: SizedPoly {
-                poly: X_BUTTON,
-                width: Dimension::Pixels(metrics.cell_size.height as f32 / 2.),
-                height: Dimension::Pixels(metrics.cell_size.height as f32 / 2.),
-            },
-        },
-    )
-    // Ensure that we draw our background over the
-    // top of the rest of the tab contents
-    .zindex(1)
-    .vertical_align(VerticalAlign::Middle)
-    .float(Float::Right)
-    .item_type(UIItemType::CloseTab(tab_idx))
-    .hover_colors({
-        let inactive_tab_hover = colors.inactive_tab_hover();
-        let active_tab = colors.active_tab();
-
-        Some(ElementColors {
-            border: BorderColor::default(),
-            bg: (if active {
-                inactive_tab_hover.bg_color
-            } else {
-                active_tab.bg_color
-            })
-            .to_linear()
-            .into(),
-            text: (if active {
-                inactive_tab_hover.fg_color
-            } else {
-                active_tab.fg_color
-            })
-            .to_linear()
-            .into(),
-        })
-    })
-    .padding(BoxDimension {
-        left: Dimension::Cells(0.25),
-        right: Dimension::Cells(0.25),
-        top: Dimension::Cells(0.25),
-        bottom: Dimension::Cells(0.25),
-    })
     .margin(BoxDimension {
         left: Dimension::Cells(0.5),
         right: Dimension::Cells(0.),

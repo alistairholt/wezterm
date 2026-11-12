@@ -26,6 +26,28 @@ impl crate::TermWindow {
                 .contains(::window::WindowState::FULL_SCREEN)
     }
 
+    /// The tab bar colors for the retro bar. When the color scheme or
+    /// config doesn't set `tab_bar.background`, the bar uses the
+    /// window_frame title bar color, as the fancy styles do, rather than a
+    /// fixed grey.
+    pub fn retro_tab_bar_colors(&self) -> config::TabBarColors {
+        let mut colors = self
+            .config
+            .resolved_palette
+            .tab_bar
+            .clone()
+            .unwrap_or_default();
+        if colors.background.is_none() {
+            let frame = &self.config.window_frame;
+            colors.background = Some(if self.focused.is_some() {
+                frame.active_titlebar_bg
+            } else {
+                frame.inactive_titlebar_bg
+            });
+        }
+        colors
+    }
+
     /// How many blank cells come before the first retro tab: room for the
     /// traffic lights plus the same gap they have from the window's edge,
     /// or just that gap without them. None when non-native title buttons
@@ -83,13 +105,7 @@ impl crate::TermWindow {
         // it with the bar color and put the line in the middle.
         let line_height = self.render_metrics.cell_size.height as f32;
         if tab_bar_height > line_height {
-            let bg = self
-                .config
-                .resolved_palette
-                .tab_bar
-                .as_ref()
-                .map(|c| c.background())
-                .unwrap_or_else(|| config::TabBarColors::default().background());
+            let bg = self.retro_tab_bar_colors().background();
             self.filled_rectangle(
                 layers,
                 0,
