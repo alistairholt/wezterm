@@ -2,6 +2,7 @@ use crate::customglyph::*;
 use crate::tabbar::{TabBarItem, TabEntry};
 use crate::termwindow::box_model::*;
 use crate::termwindow::render::corners::*;
+use crate::termwindow::render::tab_bar::{TRAFFIC_LIGHTS_END_PT, TRAFFIC_LIGHTS_GAP_PT};
 
 use crate::termwindow::render::window_buttons::window_button_element;
 use crate::termwindow::{UIItem, UIItemType};
@@ -119,6 +120,9 @@ impl crate::TermWindow {
             pixel_cell: metrics.cell_size.height as f32,
         });
         let tab_height = metrics.cell_size.height as f32 + 2. * pad_y_px;
+        // Fancy tabs' top corners: square, so the curve isn't stretched by
+        // the cell being taller than it is wide.
+        let fancy_radius = Dimension::Pixels((metrics.cell_size.height as f32 * 0.4).round());
         let pill_radius = Dimension::Pixels(tab_height * frame.tab_corner_radius.clamp(0., 0.5));
 
         let tab_vertical_alignment = if self.config.tab_bar_at_bottom {
@@ -315,27 +319,27 @@ impl crate::TermWindow {
                             top_left: SizedPoly::none(),
                             top_right: SizedPoly::none(),
                             bottom_left: SizedPoly {
-                                width: Dimension::Cells(0.5),
-                                height: Dimension::Cells(0.5),
-                                poly: BOTTOM_LEFT_ROUNDED_CORNER,
+                                width: fancy_radius,
+                                height: fancy_radius,
+                                poly: BOTTOM_LEFT_SUPERELLIPSE_CORNER,
                             },
                             bottom_right: SizedPoly {
-                                width: Dimension::Cells(0.5),
-                                height: Dimension::Cells(0.5),
-                                poly: BOTTOM_RIGHT_ROUNDED_CORNER,
+                                width: fancy_radius,
+                                height: fancy_radius,
+                                poly: BOTTOM_RIGHT_SUPERELLIPSE_CORNER,
                             },
                         }
                     } else {
                         Corners {
                             top_left: SizedPoly {
-                                width: Dimension::Cells(0.5),
-                                height: Dimension::Cells(0.5),
-                                poly: TOP_LEFT_ROUNDED_CORNER,
+                                width: fancy_radius,
+                                height: fancy_radius,
+                                poly: TOP_LEFT_SUPERELLIPSE_CORNER,
                             },
                             top_right: SizedPoly {
-                                width: Dimension::Cells(0.5),
-                                height: Dimension::Cells(0.5),
-                                poly: TOP_RIGHT_ROUNDED_CORNER,
+                                width: fancy_radius,
+                                height: fancy_radius,
+                                poly: TOP_RIGHT_SUPERELLIPSE_CORNER,
                             },
                             bottom_left: SizedPoly::none(),
                             bottom_right: SizedPoly::none(),
@@ -394,27 +398,27 @@ impl crate::TermWindow {
                                 poly: &[],
                             },
                             bottom_left: SizedPoly {
-                                width: Dimension::Cells(0.5),
-                                height: Dimension::Cells(0.5),
-                                poly: BOTTOM_LEFT_ROUNDED_CORNER,
+                                width: fancy_radius,
+                                height: fancy_radius,
+                                poly: BOTTOM_LEFT_SUPERELLIPSE_CORNER,
                             },
                             bottom_right: SizedPoly {
-                                width: Dimension::Cells(0.5),
-                                height: Dimension::Cells(0.5),
-                                poly: BOTTOM_RIGHT_ROUNDED_CORNER,
+                                width: fancy_radius,
+                                height: fancy_radius,
+                                poly: BOTTOM_RIGHT_SUPERELLIPSE_CORNER,
                             },
                         }
                     } else {
                         Corners {
                             top_left: SizedPoly {
-                                width: Dimension::Cells(0.5),
-                                height: Dimension::Cells(0.5),
-                                poly: TOP_LEFT_ROUNDED_CORNER,
+                                width: fancy_radius,
+                                height: fancy_radius,
+                                poly: TOP_LEFT_SUPERELLIPSE_CORNER,
                             },
                             top_right: SizedPoly {
-                                width: Dimension::Cells(0.5),
-                                height: Dimension::Cells(0.5),
-                                poly: TOP_RIGHT_ROUNDED_CORNER,
+                                width: fancy_radius,
+                                height: fancy_radius,
+                                poly: TOP_RIGHT_SUPERELLIPSE_CORNER,
                             },
                             bottom_left: SizedPoly {
                                 width: Dimension::Cells(0.),
@@ -487,33 +491,7 @@ impl crate::TermWindow {
             - (1.5 * metrics.cell_size.width as f32))
             .max(0.);
 
-        let native_buttons_shown = self
-            .config
-            .window_decorations
-            .contains(::window::WindowDecorations::INTEGRATED_BUTTONS)
-            && self.config.integrated_title_button_style == IntegratedTitleButtonStyle::MacOsNative
-            && !self.window_state.contains(window::WindowState::FULL_SCREEN);
-
-        // Reserve space for the native titlebar buttons. Flat and Capsule
-        // reserve it in points below instead, so it doesn't depend on the
-        // font's cell width.
-        if style == TabStyle::Fancy
-            && self
-                .config
-                .window_decorations
-                .contains(::window::WindowDecorations::INTEGRATED_BUTTONS)
-            && self.config.integrated_title_button_style == IntegratedTitleButtonStyle::MacOsNative
-            && !self.window_state.contains(window::WindowState::FULL_SCREEN)
-        {
-            left_status.push(
-                Element::new(&font, ElementContent::Text("".to_string())).margin(BoxDimension {
-                    left: Dimension::Cells(4.0), // FIXME: determine exact width of macos ... buttons
-                    right: Dimension::Cells(0.),
-                    top: Dimension::Cells(0.),
-                    bottom: Dimension::Cells(0.),
-                }),
-            );
-        }
+        let native_buttons_shown = self.native_traffic_lights_shown();
 
         for item in items {
             match item.item {
@@ -586,33 +564,20 @@ impl crate::TermWindow {
                 || self.config.integrated_title_button_style
                     == IntegratedTitleButtonStyle::MacOsNative);
 
-        // Flat and Capsule tabs start the same gap after the traffic lights
-        // as the lights are from the window's edge (points, measured on
-        // macOS 26: the lights are 14pt wide, 9pt apart and 9pt from the
-        // left, so the zoom button ends at 69pt). Without the lights, the
-        // first tab is that gap from the edge.
-        const LIGHTS_END: f32 = 69.;
-        const LIGHTS_GAP: f32 = 9.;
+        // Tabs start the same gap after the traffic lights as the lights
+        // are from the window's edge, or that gap from the edge without
+        // them. In points, so it doesn't depend on the font.
         let points = |pt: f32| Dimension::Pixels(pt * self.dimensions.dpi as f32 / 72.);
-        let left_padding = if style != TabStyle::Fancy {
-            points(if native_buttons_shown {
-                LIGHTS_END + LIGHTS_GAP
-            } else {
-                LIGHTS_GAP
-            })
-        } else if window_buttons_at_left {
-            if self.config.integrated_title_button_style == IntegratedTitleButtonStyle::MacOsNative
-            {
-                if !self.window_state.contains(window::WindowState::FULL_SCREEN) {
-                    Dimension::Pixels(70.0)
-                } else {
-                    Dimension::Cells(0.5)
-                }
-            } else {
-                Dimension::Pixels(0.0)
-            }
-        } else {
+        let left_padding = if native_buttons_shown {
+            points(TRAFFIC_LIGHTS_END_PT + TRAFFIC_LIGHTS_GAP_PT)
+        } else if window_buttons_at_left
+            && self.config.integrated_title_button_style != IntegratedTitleButtonStyle::MacOsNative
+        {
+            Dimension::Pixels(0.0)
+        } else if style == TabStyle::Fancy {
             Dimension::Cells(0.5)
+        } else {
+            points(TRAFFIC_LIGHTS_GAP_PT)
         };
 
         children.push(

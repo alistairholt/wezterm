@@ -447,6 +447,7 @@ impl TabBarState {
         config: &ConfigHandle,
         left_status: &str,
         right_status: &str,
+        traffic_light_cells: usize,
     ) -> Self {
         let colors = colors.cloned().unwrap_or_else(TabBarColors::default);
 
@@ -536,7 +537,7 @@ impl TabBarState {
             && !config.tab_style().is_fancy()
             && config.tab_bar_at_bottom == false
         {
-            for _ in 0..10 as usize {
+            for _ in 0..traffic_light_cells {
                 line.insert_cell(0, black_cell.clone(), title_width, SEQ_ZERO);
                 x += 1;
             }

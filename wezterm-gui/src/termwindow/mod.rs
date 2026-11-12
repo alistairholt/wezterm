@@ -2056,6 +2056,7 @@ impl TermWindow {
             &self.config,
             &self.left_status,
             &self.right_status,
+            self.retro_traffic_light_cells(),
         );
         if new_tab_bar != self.tab_bar {
             self.tab_bar = new_tab_bar;

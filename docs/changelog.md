@@ -151,6 +151,10 @@ As features stabilize some brief notes about them will accumulate here.
   `tab_padding_y` and `tab_corner_radius` for them.
   [use_fancy_tab_bar](config/lua/config/use_fancy_tab_bar.md) still works
   when `tab_style` isn't set.
+* macOS: with `window_decorations = "INTEGRATED_BUTTONS"`, the tab bar is
+  tall enough for the traffic lights in every tab style, and tabs start a
+  fixed gap after them rather than a font-dependent one. Fancy tabs' top
+  corners are no longer stretched.
 * Right-click shows a context menu, like Terminal.app's: open or copy a
   link, copy, paste, select all, split the pane, clear the scrollback
   or close the pane. See
