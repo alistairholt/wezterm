@@ -28,6 +28,10 @@ As features stabilize some brief notes about them will accumulate here.
   about 1.2x faster for colored output.
 * Lines that move into scrollback drop their spare capacity, so scrollback
   uses about 25-35% less memory per line.
+* The caches of drawn and shaped lines now keep only about two to four
+  screens of lines instead of filling to their configured size with lines
+  that scrolled away. A window uses 5-15MB less memory after a burst of
+  output, with no change in redraw time.
 * Fixed a crash when a notification (such as the font fallback warning) was
   shown while `wezterm-gui` ran outside an app bundle, for example from
   `cargo run`.

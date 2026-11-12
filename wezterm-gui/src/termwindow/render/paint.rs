@@ -249,6 +249,8 @@ impl crate::TermWindow {
             .context("filled_rectangle for window background")?;
         }
 
+        let visible_rows: usize = panes.iter().map(|pos| pos.height).sum();
+
         for pos in panes {
             if pos.is_active {
                 self.update_text_cursor(&pos);
@@ -277,6 +279,29 @@ impl crate::TermWindow {
         drop(layers);
         self.paint_modal().context("paint_modal")?;
 
+        self.trim_line_caches(visible_rows);
+
         Ok(())
+    }
+
+    /// Drops cached lines that have gone out of use, sized to what is on
+    /// screen. Every line drawn this frame was just used, so it is among
+    /// the most recent entries and survives. Without this the caches fill
+    /// to their configured size (1024 lines each by default) with lines
+    /// that scrolled away, which is 15-20 MB after a burst of output.
+    fn trim_line_caches(&self, visible_rows: usize) {
+        // Slack for the tab bar, overlays and lines drawn in one state
+        // and then another (cursor blink, selection).
+        const SLACK: usize = 64;
+        // The quad cache key includes the line's position, so only lines
+        // on screen now can hit again: keep two screens.
+        self.line_quad_cache
+            .borrow_mut()
+            .trim_least_recent(visible_rows * 2 + SLACK);
+        // Shaped lines are keyed by content and hit again when a line
+        // scrolls or the viewport moves back: keep four screens.
+        self.line_to_ele_shape_cache
+            .borrow_mut()
+            .trim_least_recent(visible_rows * 4 + SLACK);
     }
 }
