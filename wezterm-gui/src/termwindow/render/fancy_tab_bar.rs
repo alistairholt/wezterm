@@ -27,6 +27,71 @@ const DIVIDER: &[Poly] = &[Poly {
     style: PolyStyle::Fill,
 }];
 
+/// Replaces each "│" in a status element's text with a divider line like
+/// the ones between tabs, in that text's color, and centres the text and
+/// the lines on each other.
+fn status_dividers(
+    mut elem: Element,
+    font: &Rc<LoadedFont>,
+    height: Dimension,
+    cell_width: f32,
+) -> Element {
+    let kids = match elem.content {
+        ElementContent::Children(kids) => kids,
+        other => {
+            elem.content = other;
+            return elem;
+        }
+    };
+    let mut out = vec![];
+    for kid in kids {
+        let text = match &kid.content {
+            ElementContent::Text(t) if t.contains('│') => t.clone(),
+            _ => {
+                out.push(kid.vertical_align(VerticalAlign::Middle));
+                continue;
+            }
+        };
+        let colors = kid.colors.clone();
+        for (i, part) in text.split('│').enumerate() {
+            if i > 0 {
+                // Keep about the width of the glyph it replaces.
+                let side = Dimension::Pixels(((cell_width - 1.) / 2.).max(0.).floor());
+                out.push(
+                    Element::new(
+                        font,
+                        ElementContent::Poly {
+                            line_width: 1,
+                            poly: SizedPoly {
+                                poly: DIVIDER,
+                                width: Dimension::Pixels(1.),
+                                height,
+                            },
+                        },
+                    )
+                    .vertical_align(VerticalAlign::Middle)
+                    .margin(BoxDimension {
+                        left: side,
+                        right: side,
+                        top: Dimension::Pixels(0.),
+                        bottom: Dimension::Pixels(0.),
+                    })
+                    .colors(colors.clone()),
+                );
+            }
+            if !part.is_empty() {
+                out.push(
+                    Element::new(font, ElementContent::Text(part.to_string()))
+                        .vertical_align(VerticalAlign::Middle)
+                        .colors(colors.clone()),
+                );
+            }
+        }
+    }
+    elem.content = ElementContent::Children(out);
+    elem
+}
+
 /// The divider's height as a fraction of the tab bar's.
 const DIVIDER_HEIGHT: f32 = 0.6;
 
@@ -114,6 +179,31 @@ impl crate::TermWindow {
         }
         .to_linear();
         let style = self.config.tab_style();
+        // The background under the mouse for an inactive tab in the styles
+        // whose active tab has a background (Fancy and Capsule): the
+        // configured inactive_tab_hover color when it differs from the
+        // inactive tab's, otherwise halfway to the active tab's.
+        let tab_hover_bg = {
+            let inactive = colors.inactive_tab().bg_color;
+            let hover = colors.inactive_tab_hover().bg_color;
+            if hover != inactive {
+                hover.to_linear()
+            } else {
+                let from = if style == TabStyle::Fancy {
+                    inactive.to_linear()
+                } else {
+                    bar_bg
+                };
+                let to = colors.active_tab().bg_color.to_linear();
+                let mix = |a: f32, b: f32| a + (b - a) * 0.5;
+                LinearRgba(
+                    mix(from.0, to.0),
+                    mix(from.1, to.1),
+                    mix(from.2, to.2),
+                    mix(from.3, to.3),
+                )
+            }
+        };
         let active_idx = items.iter().find_map(|item| match item.item {
             TabBarItem::Tab {
                 tab_idx,
@@ -173,7 +263,16 @@ impl crate::TermWindow {
             match item.item {
                 TabBarItem::RightStatus | TabBarItem::LeftStatus | TabBarItem::None => element
                     .item_type(UIItemType::TabBar(TabBarItem::None))
-                    .line_height(Some(1.75))
+                    // Flat and Capsule: one line tall and in the middle of
+                    // the bar, level with the tabs, so box-drawing dividers
+                    // such as "│" are a line tall rather than the bar's
+                    // height. Fancy keeps the taller line.
+                    .line_height(Some(if style == TabStyle::Fancy { 1.75 } else { 1.0 }))
+                    .vertical_align(if style == TabStyle::Fancy {
+                        VerticalAlign::Top
+                    } else {
+                        VerticalAlign::Middle
+                    })
                     .margin(BoxDimension {
                         left: Dimension::Cells(0.),
                         right: Dimension::Cells(0.),
@@ -266,7 +365,7 @@ impl crate::TermWindow {
                             bottom: pad_y,
                         })
                         .border(BoxDimension::new(Dimension::Pixels(0.)))
-                        .border_corners(if pill {
+                        .border_corners(if style == TabStyle::Capsule {
                             Some(Corners {
                                 top_left: rounded(TOP_LEFT_SUPERELLIPSE_CORNER),
                                 top_right: rounded(TOP_RIGHT_SUPERELLIPSE_CORNER),
@@ -284,9 +383,16 @@ impl crate::TermWindow {
                         .hover_colors(if active {
                             None
                         } else {
+                            // Capsule: a pill under the mouse, between the
+                            // bar and the active pill in color.
+                            let hover_bg = if style == TabStyle::Capsule && bg_color.is_none() {
+                                tab_hover_bg
+                            } else {
+                                bg
+                            };
                             Some(ElementColors {
-                                border: border_color,
-                                bg: bg.into(),
+                                border: BorderColor::new(hover_bg),
+                                bg: hover_bg.into(),
                                 text: hover_fg.to_linear().into(),
                             })
                         })
@@ -463,16 +569,10 @@ impl crate::TermWindow {
                     })
                     .hover_colors({
                         let inactive_tab_hover = colors.inactive_tab_hover();
+                        let hover_bg = bg_color.map(|c| c.to_linear()).unwrap_or(tab_hover_bg);
                         Some(ElementColors {
-                            border: BorderColor::new(
-                                bg_color
-                                    .unwrap_or_else(|| inactive_tab_hover.bg_color.into())
-                                    .to_linear(),
-                            ),
-                            bg: bg_color
-                                .unwrap_or_else(|| inactive_tab_hover.bg_color.into())
-                                .to_linear()
-                                .into(),
+                            border: BorderColor::new(hover_bg),
+                            bg: hover_bg.into(),
                             text: fg_color
                                 .unwrap_or_else(|| inactive_tab_hover.fg_color.into())
                                 .to_linear()
@@ -502,10 +602,21 @@ impl crate::TermWindow {
 
         let native_buttons_shown = self.native_traffic_lights_shown();
 
+        // In Flat and Capsule, a "│" in the status is drawn as the same
+        // short line as the dividers between tabs, in the color it was given.
+        let divider_height = Dimension::Pixels((tab_bar_height * DIVIDER_HEIGHT).round());
+        let status_elem = |item: &TabEntry| -> Element {
+            let elem = item_to_elem(item);
+            if style == TabStyle::Fancy {
+                return elem;
+            }
+            status_dividers(elem, &font, divider_height, metrics.cell_size.width as f32)
+        };
+
         for item in items {
             match item.item {
-                TabBarItem::LeftStatus => left_status.push(item_to_elem(item)),
-                TabBarItem::None | TabBarItem::RightStatus => right_eles.push(item_to_elem(item)),
+                TabBarItem::LeftStatus => left_status.push(status_elem(item)),
+                TabBarItem::None | TabBarItem::RightStatus => right_eles.push(status_elem(item)),
                 TabBarItem::WindowButton(_) => {
                     if self.config.integrated_title_button_alignment
                         == IntegratedTitleButtonAlignment::Left
@@ -598,7 +709,12 @@ impl crate::TermWindow {
         if !left_status.is_empty() {
             children.push(
                 Element::new(&font, ElementContent::Children(left_status))
-                    .colors(bar_colors.clone()),
+                    .colors(bar_colors.clone())
+                    .vertical_align(if style == TabStyle::Fancy {
+                        VerticalAlign::Top
+                    } else {
+                        VerticalAlign::Middle
+                    }),
             );
         }
 
@@ -648,6 +764,11 @@ impl crate::TermWindow {
         children.push(
             Element::new(&font, ElementContent::Children(right_eles))
                 .colors(bar_colors.clone())
+                .vertical_align(if style == TabStyle::Fancy {
+                    VerticalAlign::Top
+                } else {
+                    VerticalAlign::Middle
+                })
                 .float(Float::Right),
         );
 
@@ -730,8 +851,9 @@ fn make_x_button(
     let x_size = (cell_h * 0.32).round();
     let pad = Dimension::Pixels(((cell_h - x_size) / 2.).floor());
     let radius = Dimension::Pixels((cell_h * 0.3).round());
-    // The hover background is the text color at a low opacity over the tab.
-    let mix = |a: f32, b: f32| a + (b - a) * 0.15;
+    // The hover background is the text color at 5% over the tab, mixed in
+    // linear space, where that already reads as a soft grey.
+    let mix = |a: f32, b: f32| a + (b - a) * 0.05;
     let hover_bg = LinearRgba(
         mix(tab_bg.0, hover_fg.0),
         mix(tab_bg.1, hover_fg.1),
@@ -770,9 +892,11 @@ fn make_x_button(
         bottom_left: rounded(BOTTOM_LEFT_SUPERELLIPSE_CORNER),
         bottom_right: rounded(BOTTOM_RIGHT_SUPERELLIPSE_CORNER),
     }))
+    // Clear at rest, so it shows whatever is behind the tab, including the
+    // tab's own hover background.
     .colors(ElementColors {
-        border: border(tab_bg),
-        bg: tab_bg.into(),
+        border: border(LinearRgba::TRANSPARENT),
+        bg: LinearRgba::TRANSPARENT.into(),
         text: fg.into(),
     })
     .hover_colors(Some(ElementColors {
