@@ -163,6 +163,9 @@ As features stabilize some brief notes about them will accumulate here.
   middle of the bar, one line tall, so they line up with the tabs at any
   font size. A `│` in the status is drawn as the same short line as the
   dividers between tabs, in the color it was given.
+* Capsule tabs show a pill under the mouse, and Fancy tabs a lighter tab.
+  The color is `inactive_tab_hover.bg_color` when it differs from
+  `inactive_tab.bg_color`, otherwise halfway to the active tab's color.
 * Right-click shows a context menu, like Terminal.app's: open or copy a
   link, copy, paste, select all, split the pane, clear the scrollback
   or close the pane. See

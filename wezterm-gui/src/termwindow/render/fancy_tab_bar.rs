@@ -179,6 +179,31 @@ impl crate::TermWindow {
         }
         .to_linear();
         let style = self.config.tab_style();
+        // The background under the mouse for an inactive tab in the styles
+        // whose active tab has a background (Fancy and Capsule): the
+        // configured inactive_tab_hover color when it differs from the
+        // inactive tab's, otherwise halfway to the active tab's.
+        let tab_hover_bg = {
+            let inactive = colors.inactive_tab().bg_color;
+            let hover = colors.inactive_tab_hover().bg_color;
+            if hover != inactive {
+                hover.to_linear()
+            } else {
+                let from = if style == TabStyle::Fancy {
+                    inactive.to_linear()
+                } else {
+                    bar_bg
+                };
+                let to = colors.active_tab().bg_color.to_linear();
+                let mix = |a: f32, b: f32| a + (b - a) * 0.5;
+                LinearRgba(
+                    mix(from.0, to.0),
+                    mix(from.1, to.1),
+                    mix(from.2, to.2),
+                    mix(from.3, to.3),
+                )
+            }
+        };
         let active_idx = items.iter().find_map(|item| match item.item {
             TabBarItem::Tab {
                 tab_idx,
@@ -340,7 +365,7 @@ impl crate::TermWindow {
                             bottom: pad_y,
                         })
                         .border(BoxDimension::new(Dimension::Pixels(0.)))
-                        .border_corners(if pill {
+                        .border_corners(if style == TabStyle::Capsule {
                             Some(Corners {
                                 top_left: rounded(TOP_LEFT_SUPERELLIPSE_CORNER),
                                 top_right: rounded(TOP_RIGHT_SUPERELLIPSE_CORNER),
@@ -358,9 +383,16 @@ impl crate::TermWindow {
                         .hover_colors(if active {
                             None
                         } else {
+                            // Capsule: a pill under the mouse, between the
+                            // bar and the active pill in color.
+                            let hover_bg = if style == TabStyle::Capsule && bg_color.is_none() {
+                                tab_hover_bg
+                            } else {
+                                bg
+                            };
                             Some(ElementColors {
-                                border: border_color,
-                                bg: bg.into(),
+                                border: BorderColor::new(hover_bg),
+                                bg: hover_bg.into(),
                                 text: hover_fg.to_linear().into(),
                             })
                         })
@@ -537,16 +569,10 @@ impl crate::TermWindow {
                     })
                     .hover_colors({
                         let inactive_tab_hover = colors.inactive_tab_hover();
+                        let hover_bg = bg_color.map(|c| c.to_linear()).unwrap_or(tab_hover_bg);
                         Some(ElementColors {
-                            border: BorderColor::new(
-                                bg_color
-                                    .unwrap_or_else(|| inactive_tab_hover.bg_color.into())
-                                    .to_linear(),
-                            ),
-                            bg: bg_color
-                                .unwrap_or_else(|| inactive_tab_hover.bg_color.into())
-                                .to_linear()
-                                .into(),
+                            border: BorderColor::new(hover_bg),
+                            bg: hover_bg.into(),
                             text: fg_color
                                 .unwrap_or_else(|| inactive_tab_hover.fg_color.into())
                                 .to_linear()
@@ -825,8 +851,9 @@ fn make_x_button(
     let x_size = (cell_h * 0.32).round();
     let pad = Dimension::Pixels(((cell_h - x_size) / 2.).floor());
     let radius = Dimension::Pixels((cell_h * 0.3).round());
-    // The hover background is the text color at a low opacity over the tab.
-    let mix = |a: f32, b: f32| a + (b - a) * 0.15;
+    // The hover background is the text color at 5% over the tab, mixed in
+    // linear space, where that already reads as a soft grey.
+    let mix = |a: f32, b: f32| a + (b - a) * 0.05;
     let hover_bg = LinearRgba(
         mix(tab_bg.0, hover_fg.0),
         mix(tab_bg.1, hover_fg.1),
@@ -865,9 +892,11 @@ fn make_x_button(
         bottom_left: rounded(BOTTOM_LEFT_SUPERELLIPSE_CORNER),
         bottom_right: rounded(BOTTOM_RIGHT_SUPERELLIPSE_CORNER),
     }))
+    // Clear at rest, so it shows whatever is behind the tab, including the
+    // tab's own hover background.
     .colors(ElementColors {
-        border: border(tab_bg),
-        bg: tab_bg.into(),
+        border: border(LinearRgba::TRANSPARENT),
+        bg: LinearRgba::TRANSPARENT.into(),
         text: fg.into(),
     })
     .hover_colors(Some(ElementColors {
