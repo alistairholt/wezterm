@@ -213,7 +213,10 @@ impl MetalPresenter {
         layer.set_framebuffer_only(!readable);
         // Not opaque, so window_background_opacity works.
         layer.set_opaque(false);
-        layer.set_maximum_drawable_count(3);
+        // Two drawables, not three: one on screen and one being drawn.
+        // Each is a full-window BGRA texture (about 6 MB on a large
+        // Retina window), and frames are paced to the display anyway.
+        layer.set_maximum_drawable_count(2);
         layer.set_display_sync_enabled(true);
         layer.set_presents_with_transaction(false);
         // nextDrawable returns nil after about a second instead of

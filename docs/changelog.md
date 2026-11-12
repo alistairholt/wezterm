@@ -32,6 +32,14 @@ As features stabilize some brief notes about them will accumulate here.
   screens of lines instead of filling to their configured size with lines
   that scrolled away. A window uses 5-15MB less memory after a burst of
   output, with no change in redraw time.
+* The escape parser hands runs of plain ASCII to the terminal in one piece,
+  per-line config values are read once instead of per character, and the
+  parser skips work in states that do nothing. `cat` of a large file is
+  about 2x faster again for plain text and long lines, and about 1.3x
+  faster for colored output.
+* macOS: windows keep two Metal drawables instead of three. This saves one
+  full-window texture per window, and still holds 120fps on ProMotion
+  displays and during live resize.
 * Fixed a crash when a notification (such as the font fallback warning) was
   shown while `wezterm-gui` ran outside an app bundle, for example from
   `cargo run`.
