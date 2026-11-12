@@ -169,7 +169,7 @@ fn parse_buffered_data(
             }
             Ok(size) => {
                 let quick_flush = signal.note_read();
-                parser.parse(&buf[0..size], |action| {
+                parser.parse_with_print_runs(&buf[0..size], |action| {
                     let mut flush = false;
                     match &action {
                         Action::CSI(CSI::Mode(Mode::SetDecPrivateMode(DecPrivateMode::Code(

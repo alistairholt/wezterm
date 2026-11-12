@@ -72,6 +72,21 @@ impl Action {
     /// `PrintString` then the elements are combined into `PrintString`
     /// to reduce heap utilization.
     pub fn append_to(self, dest: &mut Vec<Self>) {
+        if let Action::PrintString(add) = &self {
+            match dest.last_mut() {
+                Some(Action::PrintString(s)) => {
+                    s.push_str(add);
+                    return;
+                }
+                Some(Action::Print(prior)) => {
+                    let mut s = prior.to_string();
+                    s.push_str(add);
+                    *dest.last_mut().unwrap() = Action::PrintString(s);
+                    return;
+                }
+                _ => {}
+            }
+        }
         if let Action::Print(c) = &self {
             match dest.last_mut() {
                 Some(Action::PrintString(s)) => {

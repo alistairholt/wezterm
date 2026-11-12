@@ -250,6 +250,29 @@ impl<K: Hash + Eq + Clone + Debug, V, S: Default + BuildHasher> LfuCache<K, V, S
         }
     }
 
+    /// Removes the least recently used entries until at most `keep`
+    /// remain, whatever their counts. For caches whose live entries are
+    /// all touched on every frame, this drops entries that have gone out
+    /// of use (lines that scrolled away) without waiting for the cache to
+    /// fill to its configured size.
+    pub fn trim_least_recent(&mut self, keep: usize) {
+        while self.len > keep {
+            let Some(entry) = self.recency_index.pop_back() else {
+                return;
+            };
+            let bucket = self.bucket_for_key(&entry.key);
+            unsafe {
+                self.frequency_index.cursor_mut_from_ptr(&*entry).remove();
+                self.buckets
+                    .get_mut(bucket)
+                    .unwrap()
+                    .cursor_mut_from_ptr(&*entry)
+                    .remove();
+            }
+            self.len -= 1;
+        }
+    }
+
     pub fn clear(&mut self) {
         self.frequency_index.clear();
         self.recency_index.clear();
@@ -895,5 +918,43 @@ mod test {
 ]
 "#
         );
+    }
+
+    /// Trimming keeps the most recently used entries even when older
+    /// ones have higher counts, and leaves the cache consistent for
+    /// later puts and evictions.
+    #[test]
+    fn trim_keeps_most_recent() {
+        let mut cache = LfuCacheU64::with_capacity(8);
+        for i in 0..6 {
+            cache.put(i, i);
+        }
+        // Make the oldest entries hot
+        for _ in 0..10 {
+            cache.get(&0);
+            cache.get(&1);
+        }
+        // Then use 4 and 5 most recently
+        cache.get(&4);
+        cache.get(&5);
+
+        cache.trim_least_recent(3);
+        assert_eq!(cache.len(), 3);
+        let mut keys: Vec<u64> = recency_order(&cache).iter().map(|e| *e.key).collect();
+        keys.sort();
+        assert_eq!(keys, vec![1, 4, 5]);
+        assert!(cache.get(&2).is_none());
+        assert_eq!(frequency_order(&cache).len(), 3);
+
+        // Still works as a cache afterwards
+        for i in 10..20 {
+            cache.put(i, i);
+        }
+        assert_eq!(cache.len(), 8);
+        assert_eq!(cache.get(&19), Some(&19));
+
+        cache.trim_least_recent(0);
+        assert_eq!(cache.len(), 0);
+        assert!(frequency_order(&cache).is_empty());
     }
 }

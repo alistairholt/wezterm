@@ -808,6 +808,46 @@ impl Line {
         self.set_cell(idx, Cell::new_grapheme_with_width(text, width, attr), seqno);
     }
 
+    /// Writes `text`, which must be printable ASCII, starting at cell `idx`,
+    /// one cell per byte. Same result as calling `set_cell_grapheme` for
+    /// each byte with width 1, but appends to clustered storage in one go.
+    pub fn set_cells_ascii(
+        &mut self,
+        idx: usize,
+        text: &str,
+        attr: &CellAttributes,
+        seqno: SequenceNo,
+    ) {
+        debug_assert!(text.bytes().all(|b| (0x20..0x7f).contains(&b)));
+        if text.is_empty() {
+            return;
+        }
+        if attr.hyperlink().is_some() {
+            self.bits |= LineBits::HAS_HYPERLINK;
+        }
+
+        if let CellStorage::C(cl) = &mut self.cells {
+            if idx >= cl.len() {
+                while cl.len() < idx {
+                    cl.append_grapheme(" ", 1, CellAttributes::blank());
+                }
+                cl.append_ascii(text, attr);
+                self.invalidate_implicit_hyperlinks(seqno);
+                self.invalidate_zones();
+                self.update_last_change_seqno(seqno);
+                return;
+            }
+        }
+
+        for i in 0..text.len() {
+            self.set_cell(
+                idx + i,
+                Cell::new_grapheme_with_width(&text[i..i + 1], 1, attr.clone()),
+                seqno,
+            );
+        }
+    }
+
     pub fn set_cell_clearing_image_placements(
         &mut self,
         idx: usize,
@@ -1083,11 +1123,15 @@ impl Line {
     /// re-materialize the storage in a form that is suitable
     /// for mutation.
     pub fn compress_for_scrollback(&mut self) {
-        let cv = match &self.cells {
-            CellStorage::V(v) => ClusteredLine::from_cell_vec(v.len(), self.visible_cells()),
-            CellStorage::C(_) => return,
-        };
-        self.cells = CellStorage::C(cv);
+        match &mut self.cells {
+            CellStorage::V(v) => {
+                let mut cv = ClusteredLine::from_cell_vec(v.len(), self.visible_cells());
+                cv.shrink_to_fit();
+                self.cells = CellStorage::C(cv);
+            }
+            CellStorage::C(cl) => cl.shrink_to_fit(),
+        }
+        self.zones.shrink_to_fit();
     }
 
     pub fn cells_mut(&mut self) -> &mut [Cell] {

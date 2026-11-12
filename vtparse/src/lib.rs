@@ -112,6 +112,15 @@ pub trait VTActor {
     /// character.
     fn print(&mut self, b: char);
 
+    /// A run of printable ASCII (0x20-0x7F) seen in the ground state.
+    /// The same as calling `print` for each character, which is what the
+    /// default does; implement it to handle the run in one go.
+    fn print_str(&mut self, s: &str) {
+        for c in s.chars() {
+            self.print(c);
+        }
+    }
+
     /// The C0 or C1 control function should be executed, which may have any one of a variety of
     /// effects, including changing the cursor position, suspending or resuming communications or
     /// changing the shift states in effect.
@@ -521,27 +530,33 @@ impl VTParser {
         }
     }
 
+    /// The Clear action: reset the collected sequence state.
+    #[inline(always)]
+    fn clear(&mut self) {
+        self.num_intermediates = 0;
+        self.ignored_excess_intermediates = false;
+        self.osc.num_params = 0;
+        self.osc.full = false;
+        self.num_params = 0;
+        self.params_full = false;
+        self.current_param.take();
+        #[cfg(any(feature = "std", feature = "alloc"))]
+        {
+            if self.apc_data.capacity() != 0 {
+                self.apc_data = Vec::new();
+            }
+            if self.osc.buffer.capacity() != 0 {
+                self.osc.buffer = Vec::new();
+            }
+        }
+    }
+
     fn action(&mut self, action: Action, param: u8, actor: &mut dyn VTActor) {
         match action {
             Action::None | Action::Ignore => {}
             Action::Print => actor.print(param as char),
             Action::Execute => actor.execute_c0_or_c1(param),
-            Action::Clear => {
-                self.num_intermediates = 0;
-                self.ignored_excess_intermediates = false;
-                self.osc.num_params = 0;
-                self.osc.full = false;
-                self.num_params = 0;
-                self.params_full = false;
-                self.current_param.take();
-                #[cfg(any(feature = "std", feature = "alloc"))]
-                {
-                    self.apc_data.clear();
-                    self.apc_data.shrink_to_fit();
-                    self.osc.buffer.clear();
-                    self.osc.buffer.shrink_to_fit();
-                }
-            }
+            Action::Clear => self.clear(),
             Action::Collect => {
                 if self.num_intermediates < MAX_INTERMEDIATES {
                     self.intermediates[self.num_intermediates] = param;
@@ -734,14 +749,26 @@ impl VTParser {
         let (action, state) = lookup(self.state, byte);
 
         if state != self.state {
+            // Most transitions have no exit or entry action, and Clear is
+            // the common entry action; skip the call for None and run Clear
+            // inline. This is a measurable share of parsing colored output.
             if state != State::Utf8Sequence {
-                self.action(lookup_exit(self.state), 0, actor);
+                let exit = lookup_exit(self.state);
+                if exit != Action::None {
+                    self.action(exit, 0, actor);
+                }
             }
-            self.action(action, byte, actor);
-            self.action(lookup_entry(state), byte, actor);
+            if action != Action::None {
+                self.action(action, byte, actor);
+            }
+            match lookup_entry(state) {
+                Action::None => {}
+                Action::Clear => self.clear(),
+                entry => self.action(entry, byte, actor),
+            }
             self.utf8_return_state = self.state;
             self.state = state;
-        } else {
+        } else if action != Action::None {
             self.action(action, byte, actor);
         }
     }
@@ -750,8 +777,27 @@ impl VTParser {
     /// This may result in some number of calls to the methods on the
     /// provided `actor`.
     pub fn parse(&mut self, bytes: &[u8], actor: &mut dyn VTActor) {
-        for b in bytes {
-            self.parse_byte(*b, actor);
+        let mut i = 0;
+        while i < bytes.len() {
+            if self.state == State::Ground {
+                // In the ground state every byte in 0x20-0x7F is a Print
+                // that stays in the ground state, so hand a run of them
+                // over at once.
+                let rest = &bytes[i..];
+                let run = rest
+                    .iter()
+                    .position(|b| !(0x20..=0x7f).contains(b))
+                    .unwrap_or(rest.len());
+                if run > 1 {
+                    if let Ok(s) = core::str::from_utf8(&rest[..run]) {
+                        actor.print_str(s);
+                        i += run;
+                        continue;
+                    }
+                }
+            }
+            self.parse_byte(bytes[i], actor);
+            i += 1;
         }
     }
 }
@@ -766,6 +812,34 @@ mod test {
         let mut actor = CollectingVTActor::default();
         parser.parse(bytes, &mut actor);
         actor.into_vec()
+    }
+
+    /// `parse` hands runs of printable ASCII to `print_str` in one go
+    /// when in the Ground state. Check that it gives the same actions as
+    /// feeding every byte through `parse_byte`, for every split of the
+    /// input into two chunks, so runs that start or end at a chunk edge,
+    /// inside an escape sequence or in the middle of a UTF-8 sequence are
+    /// covered.
+    #[test]
+    fn print_runs_match_byte_at_a_time() {
+        let input: &[u8] = b"plain text\r\n\x1b[1;31mred bold\x1b[0m \x7fdel \
+            caf\xc3\xa9 \xe2\x94\x80\xe2\x94\x80 \x1b]0;a title here\x07after \
+            \x1bPq#0;2;0;0;0#1~~@@\x1b\\done\x1b_apc data\x1b\\ \x1b(Bend\xffx";
+
+        let mut expected_parser = VTParser::new();
+        let mut expected = CollectingVTActor::default();
+        for &b in input {
+            expected_parser.parse_byte(b, &mut expected);
+        }
+        let expected = expected.into_vec();
+
+        for split in 0..=input.len() {
+            let mut parser = VTParser::new();
+            let mut actor = CollectingVTActor::default();
+            parser.parse(&input[..split], &mut actor);
+            parser.parse(&input[split..], &mut actor);
+            assert_eq!(actor.into_vec(), expected, "split at {split}");
+        }
     }
 
     #[test]
