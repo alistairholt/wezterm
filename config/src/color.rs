@@ -653,6 +653,34 @@ pub struct WindowFrameConfig {
     pub border_right_color: Option<RgbaColor>,
     pub border_top_color: Option<RgbaColor>,
     pub border_bottom_color: Option<RgbaColor>,
+
+    /// Space around each tab's title in the Flat and Capsule tab styles.
+    #[dynamic(
+        try_from = "crate::units::PixelUnit",
+        default = "default_tab_padding_x"
+    )]
+    pub tab_padding_x: Dimension,
+    #[dynamic(
+        try_from = "crate::units::PixelUnit",
+        default = "default_tab_padding_y"
+    )]
+    pub tab_padding_y: Dimension,
+    /// Corner radius of the Capsule style's pill, as a fraction of the
+    /// tab's height: 0.5 makes round ends, 0 makes square corners.
+    #[dynamic(default = "default_tab_corner_radius")]
+    pub tab_corner_radius: f32,
+}
+
+const fn default_tab_padding_x() -> Dimension {
+    Dimension::Cells(0.75)
+}
+
+const fn default_tab_padding_y() -> Dimension {
+    Dimension::Cells(0.25)
+}
+
+const fn default_tab_corner_radius() -> f32 {
+    0.5
 }
 
 impl WindowFrameConfig {
@@ -703,6 +731,9 @@ impl Default for WindowFrameConfig {
             border_right_color: None,
             border_top_color: None,
             border_bottom_color: None,
+            tab_padding_x: default_tab_padding_x(),
+            tab_padding_y: default_tab_padding_y(),
+            tab_corner_radius: default_tab_corner_radius(),
         }
     }
 }

@@ -22,6 +22,10 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* The tab bar runs `format-tab-title` again on every status update and
+  whenever a pane's user var changes, not only when the status text
+  changes. Tab titles built from the time (an animated spinner) or from
+  user vars now update without tricks to change the status text.
 * The default [hyperlink_rules](config/lua/config/hyperlink_rules.md) no
   longer use `\b` or a lookahead, so they run in the fast regex engine
   instead of the backtracking one. They find the same links, and scanning
@@ -139,6 +143,18 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* [tab_style](config/lua/config/tab_style.md) picks the tab bar's look in
+  one setting: `"Retro"`, `"Fancy"`, or the new `"Flat"` (thin dividers
+  between tabs) and `"Capsule"` (the active tab as a rounded pill), without
+  needing a `format-tab-title` handler to fake them.
+  [window_frame](config/lua/config/window_frame.md) gains `tab_padding_x`,
+  `tab_padding_y` and `tab_corner_radius` for them.
+  [use_fancy_tab_bar](config/lua/config/use_fancy_tab_bar.md) still works
+  when `tab_style` isn't set.
+* macOS: with `window_decorations = "INTEGRATED_BUTTONS"`, the tab bar is
+  tall enough for the traffic lights in every tab style, and tabs start a
+  fixed gap after them rather than a font-dependent one. Fancy tabs' top
+  corners are no longer stretched.
 * Right-click shows a context menu, like Terminal.app's: open or copy a
   link, copy, paste, select all, split the pane, clear the scrollback
   or close the pane. See

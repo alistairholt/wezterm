@@ -1144,18 +1144,22 @@ impl TermWindow {
             TermWindowNotif::SetRightStatus(status) => {
                 if status != self.right_status {
                     self.right_status = status;
-                    self.update_title_post_status();
-                } else {
-                    self.schedule_next_status_update();
                 }
+                // Rebuild the tab bar on every status update, not only when
+                // the status text changes, so format-tab-title output that
+                // depends on time (a spinner, say) keeps up. It is only
+                // redrawn if the result differs.
+                self.update_title_post_status();
             }
             TermWindowNotif::SetLeftStatus(status) => {
                 if status != self.left_status {
                     self.left_status = status;
-                    self.update_title_post_status();
-                } else {
-                    self.schedule_next_status_update();
                 }
+                // Rebuild the tab bar on every status update, not only when
+                // the status text changes, so format-tab-title output that
+                // depends on time (a spinner, say) keeps up. It is only
+                // redrawn if the result differs.
+                self.update_title_post_status();
             }
             TermWindowNotif::GetDimensions(tx) => {
                 tx.try_send((self.dimensions, self.window_state))
@@ -1195,7 +1199,13 @@ impl TermWindow {
                     if name == "WEZTERM_PROG" && self.window_contains_pane(pane_id) {
                         self.track_command_for_notification(pane_id, &value);
                     }
+                    let in_window = self.window_contains_pane(pane_id);
                     self.emit_user_var_event(pane_id, name, value);
+                    // format-tab-title often reads user vars, so redo the
+                    // tab titles when one changes.
+                    if in_window {
+                        self.update_title();
+                    }
                 }
                 MuxNotification::WindowTitleChanged { .. }
                 | MuxNotification::Alert {
@@ -2046,6 +2056,7 @@ impl TermWindow {
             &self.config,
             &self.left_status,
             &self.right_status,
+            self.retro_leading_cells(),
         );
         if new_tab_bar != self.tab_bar {
             self.tab_bar = new_tab_bar;

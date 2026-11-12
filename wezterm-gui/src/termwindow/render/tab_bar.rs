@@ -6,7 +6,50 @@ use mux::renderable::RenderableDimensions;
 use wezterm_term::color::ColorAttribute;
 use window::color::LinearRgba;
 
+/// Where AppKit puts the traffic lights, in points (measured on macOS 26):
+/// they are 14pt wide, 9pt apart and 9pt from the left edge, so the zoom
+/// button ends at 69pt, and their center is 15.75pt below the window's top.
+pub const TRAFFIC_LIGHTS_END_PT: f32 = 69.;
+pub const TRAFFIC_LIGHTS_GAP_PT: f32 = 9.;
+const TRAFFIC_LIGHT_CENTER_PT: f32 = 15.75;
+
 impl crate::TermWindow {
+    /// Whether the macOS traffic lights are drawn over the tab bar.
+    pub fn native_traffic_lights_shown(&self) -> bool {
+        self.config
+            .window_decorations
+            .contains(::window::WindowDecorations::INTEGRATED_BUTTONS)
+            && self.config.integrated_title_button_style
+                == ::window::IntegratedTitleButtonStyle::MacOsNative
+            && !self
+                .window_state
+                .contains(::window::WindowState::FULL_SCREEN)
+    }
+
+    /// How many blank cells come before the first retro tab: room for the
+    /// traffic lights plus the same gap they have from the window's edge,
+    /// or just that gap without them. None when non-native title buttons
+    /// sit at the left, as they start the bar.
+    pub fn retro_leading_cells(&self) -> usize {
+        let pt = if self.native_traffic_lights_shown() && !self.config.tab_bar_at_bottom {
+            TRAFFIC_LIGHTS_END_PT + TRAFFIC_LIGHTS_GAP_PT
+        } else if self
+            .config
+            .window_decorations
+            .contains(::window::WindowDecorations::INTEGRATED_BUTTONS)
+            && self.config.integrated_title_button_style
+                != ::window::IntegratedTitleButtonStyle::MacOsNative
+            && self.config.integrated_title_button_alignment
+                == ::window::IntegratedTitleButtonAlignment::Left
+        {
+            return 0;
+        } else {
+            TRAFFIC_LIGHTS_GAP_PT
+        };
+        let px = pt * self.dimensions.dpi as f32 / 72.;
+        (px / self.render_metrics.cell_size.width as f32).ceil() as usize
+    }
+
     pub fn paint_tab_bar(&mut self, layers: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
         // While any tab shows the indeterminate progress spinner, ask to be
         // repainted when its next frame is due. The paint scheduler wakes us
@@ -14,7 +57,7 @@ impl crate::TermWindow {
         // to advance the frame.
         self.update_next_frame_time(self.tab_bar.next_progress_frame_due());
 
-        if self.config.use_fancy_tab_bar {
+        if self.config.tab_style().is_fancy() {
             if self.fancy_tab_bar.is_none() {
                 let palette = self.palette().clone();
                 let tab_bar = self.build_fancy_tab_bar(&palette)?;
@@ -35,6 +78,31 @@ impl crate::TermWindow {
         } else {
             border.top.get() as f32
         };
+
+        // The bar can be taller than a line, to fit the traffic lights; fill
+        // it with the bar color and put the line in the middle.
+        let line_height = self.render_metrics.cell_size.height as f32;
+        if tab_bar_height > line_height {
+            let bg = self
+                .config
+                .resolved_palette
+                .tab_bar
+                .as_ref()
+                .map(|c| c.background())
+                .unwrap_or_else(|| config::TabBarColors::default().background());
+            self.filled_rectangle(
+                layers,
+                0,
+                euclid::rect(
+                    0.,
+                    tab_bar_y,
+                    self.dimensions.pixel_width as f32,
+                    tab_bar_height,
+                ),
+                bg.to_linear(),
+            )?;
+        }
+        let tab_bar_y = tab_bar_y + ((tab_bar_height - line_height) / 2.).floor();
 
         // Register the tab bar location
         self.ui_items.append(&mut self.tab_bar.compute_ui_items(
@@ -111,11 +179,33 @@ impl crate::TermWindow {
         fontconfig: &wezterm_font::FontConfiguration,
         render_metrics: &RenderMetrics,
     ) -> anyhow::Result<f32> {
-        if config.use_fancy_tab_bar {
+        if config.tab_style().is_fancy() {
             let font = fontconfig.title_font()?;
-            Ok((font.metrics().cell_height.get() as f32 * 1.75).ceil())
+            let height = font.metrics().cell_height.get() as f32 * 1.75;
+            Ok(height
+                .max(Self::traffic_light_bar_height(config, fontconfig))
+                .ceil())
         } else {
-            Ok(render_metrics.cell_size.height as f32)
+            Ok((render_metrics.cell_size.height as f32)
+                .max(Self::traffic_light_bar_height(config, fontconfig))
+                .ceil())
+        }
+    }
+
+    /// On macOS the bar is at least twice as tall as the traffic lights'
+    /// center is from the top of the window, so the lights have equal space
+    /// above and below them. The same with or without the lights and for
+    /// every tab_style, so the bar doesn't change height and tabs
+    /// aren't squeezed against its edges.
+    fn traffic_light_bar_height(
+        _config: &ConfigHandle,
+        fontconfig: &wezterm_font::FontConfiguration,
+    ) -> f32 {
+        if cfg!(target_os = "macos") {
+            // macOS reports 72 dpi per point of backing scale.
+            2. * TRAFFIC_LIGHT_CENTER_PT * fontconfig.get_dpi() as f32 / 72.
+        } else {
+            0.
         }
     }
 

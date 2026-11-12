@@ -1234,7 +1234,7 @@ impl super::TermWindow {
                 euclid::rect(
                     element.border_rect.max_x() - element.border.right,
                     element.border_rect.min_y() + top_right_height as f32,
-                    element.border.left,
+                    element.border.right,
                     element.border_rect.height() - (top_right_height + bottom_right_height) as f32,
                 ),
                 colors.border.right,

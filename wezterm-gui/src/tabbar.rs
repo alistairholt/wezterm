@@ -224,7 +224,11 @@ fn compute_tab_title(
                     tab.tab_title.clone()
                 };
 
-                let classic_spacing = if config.use_fancy_tab_bar { "" } else { " " };
+                let classic_spacing = if config.tab_style().is_fancy() {
+                    ""
+                } else {
+                    " "
+                };
                 if config.show_tab_index_in_tab_bar {
                     let index = format!(
                         "{classic_spacing}{}: ",
@@ -288,7 +292,7 @@ fn compute_tab_title(
                 // easier to click on tab titles, but we'll still go below
                 // this if there are too many tabs to fit the window at
                 // this width.
-                if !config.use_fancy_tab_bar {
+                if !config.tab_style().is_fancy() {
                     while len + unicode_column_width(&title, None) < 5 {
                         title.push(' ');
                     }
@@ -351,13 +355,13 @@ impl TabBarState {
         line: &mut Line,
         colors: &TabBarColors,
     ) {
-        let default_cell = if config.use_fancy_tab_bar {
+        let default_cell = if config.tab_style().is_fancy() {
             CellAttributes::default()
         } else {
             colors.new_tab().as_cell_attributes()
         };
 
-        let default_cell_hover = if config.use_fancy_tab_bar {
+        let default_cell_hover = if config.tab_style().is_fancy() {
             CellAttributes::default()
         } else {
             colors.new_tab_hover().as_cell_attributes()
@@ -443,6 +447,7 @@ impl TabBarState {
         config: &ConfigHandle,
         left_status: &str,
         right_status: &str,
+        leading_cells: usize,
     ) -> Self {
         let colors = colors.cloned().unwrap_or_else(TabBarColors::default);
 
@@ -454,7 +459,7 @@ impl TabBarState {
 
         let new_tab = parse_status_text(
             &config.tab_bar_style.new_tab,
-            if config.use_fancy_tab_bar {
+            if config.tab_style().is_fancy() {
                 CellAttributes::default()
             } else {
                 new_tab_attrs.clone()
@@ -462,7 +467,7 @@ impl TabBarState {
         );
         let new_tab_hover = parse_status_text(
             &config.tab_bar_style.new_tab_hover,
-            if config.use_fancy_tab_bar {
+            if config.tab_style().is_fancy() {
                 CellAttributes::default()
             } else {
                 new_tab_hover_attrs.clone()
@@ -506,7 +511,7 @@ impl TabBarState {
 
         let available_cells =
             title_width.saturating_sub(number_of_tabs.saturating_sub(1) + new_tab.len());
-        let tab_width_max = if config.use_fancy_tab_bar || available_cells >= titles_len {
+        let tab_width_max = if config.tab_style().is_fancy() || available_cells >= titles_len {
             // We can render each title with its full width
             usize::max_value()
         } else {
@@ -527,12 +532,10 @@ impl TabBarState {
                 .clone(),
         );
 
-        if use_integrated_title_buttons
-            && config.integrated_title_button_style == IntegratedTitleButtonStyle::MacOsNative
-            && config.use_fancy_tab_bar == false
-            && config.tab_bar_at_bottom == false
-        {
-            for _ in 0..10 as usize {
+        // Space before the first retro tab: room for the traffic lights,
+        // or a small gap from the window's edge.
+        if !config.tab_style().is_fancy() {
+            for _ in 0..leading_cells {
                 line.insert_cell(0, black_cell.clone(), title_width, SEQ_ZERO);
                 x += 1;
             }
@@ -588,7 +591,7 @@ impl TabBarState {
             let esc = format_as_escapes(tab_title.items.clone()).expect("already parsed ok above");
             let mut tab_line = parse_status_text(
                 &esc,
-                if config.use_fancy_tab_bar {
+                if config.tab_style().is_fancy() {
                     CellAttributes::default()
                 } else {
                     cell_attrs.clone()

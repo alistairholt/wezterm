@@ -54,3 +54,8 @@ config.window_frame = {
 ```
 
 The default font is `Roboto`. The default font_size is `10pt` on Windows and `12pt` on other systems.
+
+{{since('nightly')}}
+
+`tab_padding_x`, `tab_padding_y` and `tab_corner_radius` set the padding
+and pill shape of the Flat and Capsule [tab styles](tab_style.md).
