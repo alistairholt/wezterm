@@ -447,7 +447,7 @@ impl TabBarState {
         config: &ConfigHandle,
         left_status: &str,
         right_status: &str,
-        traffic_light_cells: usize,
+        leading_cells: usize,
     ) -> Self {
         let colors = colors.cloned().unwrap_or_else(TabBarColors::default);
 
@@ -532,12 +532,10 @@ impl TabBarState {
                 .clone(),
         );
 
-        if use_integrated_title_buttons
-            && config.integrated_title_button_style == IntegratedTitleButtonStyle::MacOsNative
-            && !config.tab_style().is_fancy()
-            && config.tab_bar_at_bottom == false
-        {
-            for _ in 0..traffic_light_cells {
+        // Space before the first retro tab: room for the traffic lights,
+        // or a small gap from the window's edge.
+        if !config.tab_style().is_fancy() {
+            for _ in 0..leading_cells {
                 line.insert_cell(0, black_cell.clone(), title_width, SEQ_ZERO);
                 x += 1;
             }

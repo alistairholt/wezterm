@@ -26,14 +26,27 @@ impl crate::TermWindow {
                 .contains(::window::WindowState::FULL_SCREEN)
     }
 
-    /// How many retro tab bar cells to leave free for the traffic lights,
-    /// so the first tab starts the same gap after them as they are from
-    /// the window's edge.
-    pub fn retro_traffic_light_cells(&self) -> usize {
-        if !self.native_traffic_lights_shown() {
+    /// How many blank cells come before the first retro tab: room for the
+    /// traffic lights plus the same gap they have from the window's edge,
+    /// or just that gap without them. None when non-native title buttons
+    /// sit at the left, as they start the bar.
+    pub fn retro_leading_cells(&self) -> usize {
+        let pt = if self.native_traffic_lights_shown() && !self.config.tab_bar_at_bottom {
+            TRAFFIC_LIGHTS_END_PT + TRAFFIC_LIGHTS_GAP_PT
+        } else if self
+            .config
+            .window_decorations
+            .contains(::window::WindowDecorations::INTEGRATED_BUTTONS)
+            && self.config.integrated_title_button_style
+                != ::window::IntegratedTitleButtonStyle::MacOsNative
+            && self.config.integrated_title_button_alignment
+                == ::window::IntegratedTitleButtonAlignment::Left
+        {
             return 0;
-        }
-        let px = (TRAFFIC_LIGHTS_END_PT + TRAFFIC_LIGHTS_GAP_PT) * self.dimensions.dpi as f32 / 72.;
+        } else {
+            TRAFFIC_LIGHTS_GAP_PT
+        };
+        let px = pt * self.dimensions.dpi as f32 / 72.;
         (px / self.render_metrics.cell_size.width as f32).ceil() as usize
     }
 

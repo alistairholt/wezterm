@@ -14,6 +14,22 @@ use wezterm_term::color::{ColorAttribute, ColorPalette};
 use window::color::LinearRgba;
 use window::{IntegratedTitleButtonAlignment, IntegratedTitleButtonStyle};
 
+/// The divider between Flat and Capsule tabs: a filled box, drawn 1px wide.
+const DIVIDER: &[Poly] = &[Poly {
+    path: &[
+        PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Zero),
+        PolyCommand::LineTo(BlockCoord::One, BlockCoord::Zero),
+        PolyCommand::LineTo(BlockCoord::One, BlockCoord::One),
+        PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::One),
+        PolyCommand::Close,
+    ],
+    intensity: BlockAlpha::Full,
+    style: PolyStyle::Fill,
+}];
+
+/// The divider's height as a fraction of the tab bar's.
+const DIVIDER_HEIGHT: f32 = 0.6;
+
 const X_BUTTON: &[Poly] = &[
     Poly {
         path: &[
@@ -208,14 +224,8 @@ impl crate::TermWindow {
                     bg: new_tab_hover.bg_color.to_linear().into(),
                     text: new_tab_hover.fg_color.to_linear().into(),
                 })),
-                TabBarItem::Tab { tab_idx, active } if style != TabStyle::Fancy => {
+                TabBarItem::Tab { active, .. } if style != TabStyle::Fancy => {
                     let pill = style == TabStyle::Capsule && active;
-                    // A divider on the right edge, between this tab and the
-                    // next; none after the last tab or beside the pill.
-                    let beside_pill =
-                        style == TabStyle::Capsule && (active || active_idx == Some(tab_idx + 1));
-                    let divider = tab_idx + 1 < tab_count && !beside_pill;
-                    let edge = colors.inactive_tab_edge().to_linear();
                     let (bg, fg) = if active {
                         let bg = if pill {
                             bg_color
@@ -234,7 +244,7 @@ impl crate::TermWindow {
                     };
                     let border_color = BorderColor {
                         left: bg,
-                        right: if divider { edge } else { bg },
+                        right: bg,
                         top: bg,
                         bottom: bg,
                     };
@@ -255,15 +265,7 @@ impl crate::TermWindow {
                             top: pad_y,
                             bottom: pad_y,
                         })
-                        .border(BoxDimension {
-                            left: Dimension::Pixels(0.),
-                            // Always 1px, so tabs don't shift when a
-                            // divider hides; a hidden one is drawn in the
-                            // tab's own background.
-                            right: Dimension::Pixels(1.),
-                            top: Dimension::Pixels(0.),
-                            bottom: Dimension::Pixels(0.),
-                        })
+                        .border(BoxDimension::new(Dimension::Pixels(0.)))
                         .border_corners(if pill {
                             Some(Corners {
                                 top_left: rounded(TOP_LEFT_SUPERELLIPSE_CORNER),
@@ -541,6 +543,40 @@ impl crate::TermWindow {
                         }
                     };
                     left_eles.push(elem);
+                    if style != TabStyle::Fancy && tab_idx + 1 < tab_count {
+                        // A short line between this tab and the next, in the
+                        // middle of the bar. Always there, so tabs don't shift
+                        // when one hides; none beside the pill.
+                        let beside_pill = style == TabStyle::Capsule
+                            && (active || active_idx == Some(tab_idx + 1));
+                        let color = if beside_pill {
+                            bar_bg
+                        } else {
+                            colors.inactive_tab_edge().to_linear()
+                        };
+                        left_eles.push(
+                            Element::new(
+                                &font,
+                                ElementContent::Poly {
+                                    line_width: 1,
+                                    poly: SizedPoly {
+                                        poly: DIVIDER,
+                                        width: Dimension::Pixels(1.),
+                                        height: Dimension::Pixels(
+                                            (tab_bar_height * DIVIDER_HEIGHT).round(),
+                                        ),
+                                    },
+                                },
+                            )
+                            .vertical_align(VerticalAlign::Middle)
+                            .item_type(UIItemType::TabBar(TabBarItem::None))
+                            .colors(ElementColors {
+                                border: BorderColor::default(),
+                                bg: LinearRgba::TRANSPARENT.into(),
+                                text: color.into(),
+                            }),
+                        );
+                    }
                 }
                 _ => left_eles.push(item_to_elem(item)),
             }
