@@ -173,7 +173,16 @@ impl crate::TermWindow {
             match item.item {
                 TabBarItem::RightStatus | TabBarItem::LeftStatus | TabBarItem::None => element
                     .item_type(UIItemType::TabBar(TabBarItem::None))
-                    .line_height(Some(1.75))
+                    // Flat and Capsule: one line tall and in the middle of
+                    // the bar, level with the tabs, so box-drawing dividers
+                    // such as "│" are a line tall rather than the bar's
+                    // height. Fancy keeps the taller line.
+                    .line_height(Some(if style == TabStyle::Fancy { 1.75 } else { 1.0 }))
+                    .vertical_align(if style == TabStyle::Fancy {
+                        VerticalAlign::Top
+                    } else {
+                        VerticalAlign::Middle
+                    })
                     .margin(BoxDimension {
                         left: Dimension::Cells(0.),
                         right: Dimension::Cells(0.),
@@ -598,7 +607,12 @@ impl crate::TermWindow {
         if !left_status.is_empty() {
             children.push(
                 Element::new(&font, ElementContent::Children(left_status))
-                    .colors(bar_colors.clone()),
+                    .colors(bar_colors.clone())
+                    .vertical_align(if style == TabStyle::Fancy {
+                        VerticalAlign::Top
+                    } else {
+                        VerticalAlign::Middle
+                    }),
             );
         }
 
@@ -648,6 +662,11 @@ impl crate::TermWindow {
         children.push(
             Element::new(&font, ElementContent::Children(right_eles))
                 .colors(bar_colors.clone())
+                .vertical_align(if style == TabStyle::Fancy {
+                    VerticalAlign::Top
+                } else {
+                    VerticalAlign::Middle
+                })
                 .float(Float::Right),
         );
 
