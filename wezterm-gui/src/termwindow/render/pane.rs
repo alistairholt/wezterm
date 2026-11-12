@@ -466,7 +466,17 @@ impl crate::TermWindow {
                 filled_box: TextureRect,
                 window_is_transparent: bool,
                 layers: &'a mut TripleLayerQuadAllocator<'b>,
-                error: Option<anyhow::Error>,
+                prepared: Vec<PreparedLine>,
+            }
+
+            /// A visible line, worked out while the terminal is locked.
+            /// `line` holds a copy only when the cached quads can't be
+            /// used and the line has to be drawn.
+            struct PreparedLine {
+                stable_row: StableRowIndex,
+                line_idx: usize,
+                quad_key: LineQuadCacheKey,
+                line: Option<Line>,
             }
 
             let left_pixel_x = padding_left
@@ -496,17 +506,19 @@ impl crate::TermWindow {
                 filled_box,
                 window_is_transparent,
                 layers,
-                error: None,
+                prepared: Vec::with_capacity(dims.viewport_rows),
             };
 
             impl<'a, 'b> LineRender<'a, 'b> {
-                fn render_line(
+                /// Builds the quad cache key for a line. This runs with the
+                /// terminal locked, so it must stay cheap: the shape hash is
+                /// cached on the line and only recomputed when it changed.
+                fn quad_key_for_line(
                     &mut self,
-                    stable_top: StableRowIndex,
+                    stable_row: StableRowIndex,
                     line_idx: usize,
-                    line: &&mut Line,
-                ) -> anyhow::Result<()> {
-                    let stable_row = stable_top + line_idx as StableRowIndex;
+                    line: &Line,
+                ) -> LineQuadCacheKey {
                     let selrange = self
                         .selrange
                         .map_or(0..0, |sel| sel.cols_for_row(stable_row, self.rectangular));
@@ -555,15 +567,15 @@ impl crate::TermWindow {
 
                     let shape_hash = self.term_window.shape_hash_for_line(line);
 
-                    let quad_key = LineQuadCacheKey {
+                    LineQuadCacheKey {
                         pane_id: self.pane_id,
                         password_input,
                         pane_is_active: self.pos.is_active,
                         config_generation: self.term_window.config.generation(),
                         shape_generation: self.term_window.shape_generation,
                         quad_generation: self.term_window.quad_generation,
-                        composing: composing.clone(),
-                        selection: selrange.clone(),
+                        composing,
+                        selection: selrange,
                         cursor,
                         shape_hash,
                         top_pixel_y: NotNan::new(self.top_pixel_y).unwrap()
@@ -572,39 +584,63 @@ impl crate::TermWindow {
                         left_pixel_x: NotNan::new(self.left_pixel_x).unwrap(),
                         phys_line_idx: line_idx,
                         reverse_video: self.dims.reverse_video,
-                    };
-
-                    if let Some(cached_quad) =
-                        self.term_window.line_quad_cache.borrow_mut().get(&quad_key)
-                    {
-                        let expired = cached_quad
-                            .expires
-                            .map(|i| Instant::now() >= i)
-                            .unwrap_or(false);
-                        let hover_changed = if cached_quad.invalidate_on_hover_change {
-                            !same_hyperlink(
-                                cached_quad.current_highlight.as_ref(),
-                                self.term_window.current_highlight.as_ref(),
-                            )
-                        } else {
-                            false
-                        };
-                        if !expired && !hover_changed {
-                            cached_quad
-                                .layers
-                                .apply_to(self.layers)
-                                .context("cached_quad.layers.apply_to")?;
-                            self.term_window.update_next_frame_time(cached_quad.expires);
-                            return Ok(());
-                        }
                     }
+                }
 
+                /// Whether the cached quads for this key can be drawn as
+                /// they are. Doesn't count as a use of the cache entry.
+                fn cached_quad_is_usable(&self, quad_key: &LineQuadCacheKey) -> bool {
+                    let cache = self.term_window.line_quad_cache.borrow();
+                    let Some(cached_quad) = cache.peek(quad_key) else {
+                        return false;
+                    };
+                    let expired = cached_quad
+                        .expires
+                        .map(|i| Instant::now() >= i)
+                        .unwrap_or(false);
+                    let hover_changed = if cached_quad.invalidate_on_hover_change {
+                        !same_hyperlink(
+                            cached_quad.current_highlight.as_ref(),
+                            self.term_window.current_highlight.as_ref(),
+                        )
+                    } else {
+                        false
+                    };
+                    !expired && !hover_changed
+                }
+
+                /// Draws the cached quads for a line. Returns false if the
+                /// entry has gone from the cache since it was checked.
+                fn apply_cached_quad(
+                    &mut self,
+                    quad_key: &LineQuadCacheKey,
+                ) -> anyhow::Result<bool> {
+                    let mut cache = self.term_window.line_quad_cache.borrow_mut();
+                    let Some(cached_quad) = cache.get(quad_key) else {
+                        return Ok(false);
+                    };
+                    cached_quad
+                        .layers
+                        .apply_to(self.layers)
+                        .context("cached_quad.layers.apply_to")?;
+                    self.term_window.update_next_frame_time(cached_quad.expires);
+                    Ok(true)
+                }
+
+                /// Shapes and draws a line, and caches its quads. This is
+                /// the expensive part, and runs without the terminal lock.
+                fn render_uncached(
+                    &mut self,
+                    stable_row: StableRowIndex,
+                    quad_key: LineQuadCacheKey,
+                    line: &Line,
+                ) -> anyhow::Result<()> {
                     let mut buf = self.term_window.line_quad_scratch.take();
                     buf.clear();
                     let next_due = self.term_window.has_animation.borrow_mut().take();
 
                     let shape_key = LineToEleShapeCacheKey {
-                        shape_hash,
+                        shape_hash: quad_key.shape_hash,
                         shape_generation: quad_key.shape_generation,
                         composing: if self.cursor.y == stable_row && self.pos.is_active {
                             if let DeadKeyStatus::Composing(composing) =
@@ -628,8 +664,8 @@ impl crate::TermWindow {
                                 pixel_width: self.dims.cols as f32
                                     * self.term_window.render_metrics.cell_size.width as f32,
                                 stable_line_idx: Some(stable_row),
-                                line: &line,
-                                selection: selrange.clone(),
+                                line,
+                                selection: quad_key.selection.clone(),
                                 cursor: &self.cursor,
                                 palette: &self.palette,
                                 dims: &self.dims,
@@ -655,7 +691,7 @@ impl crate::TermWindow {
                                     .experimental_pixel_positioning,
                                 render_metrics: self.term_window.render_metrics,
                                 shape_key: Some(shape_key),
-                                password_input,
+                                password_input: quad_key.password_input,
                             },
                             &mut TripleLayerQuadAllocator::Heap(&mut buf),
                         )
@@ -688,22 +724,67 @@ impl crate::TermWindow {
 
                     Ok(())
                 }
-            }
 
-            impl<'a, 'b> WithPaneLines for LineRender<'a, 'b> {
-                fn with_lines_mut(&mut self, stable_top: StableRowIndex, lines: &mut [&mut Line]) {
-                    for (line_idx, line) in lines.iter().enumerate() {
-                        if let Err(err) = self.render_line(stable_top, line_idx, line) {
-                            self.error.replace(err);
-                            return;
+                fn draw_prepared(&mut self, prepared: PreparedLine) -> anyhow::Result<()> {
+                    let PreparedLine {
+                        stable_row,
+                        line_idx,
+                        quad_key,
+                        line,
+                    } = prepared;
+                    match line {
+                        Some(line) => self.render_uncached(stable_row, quad_key, &line),
+                        None => {
+                            if self.apply_cached_quad(&quad_key)? {
+                                return Ok(());
+                            }
+                            // Lines drawn earlier in this frame pushed the
+                            // entry out of the cache. Copy the line now; it
+                            // may be newer than the rest of the frame, which
+                            // the next frame puts right.
+                            let (_, mut lines) =
+                                self.pos.pane.get_lines(stable_row..stable_row + 1);
+                            match lines.pop() {
+                                Some(line) => {
+                                    let quad_key =
+                                        self.quad_key_for_line(stable_row, line_idx, &line);
+                                    self.render_uncached(stable_row, quad_key, &line)
+                                }
+                                None => Ok(()),
+                            }
                         }
                     }
                 }
             }
 
+            /// Collects the visible lines while the terminal is locked.
+            /// Lines whose cached quads can be used are only keyed; the
+            /// others are copied so they can be shaped after the lock is
+            /// released. Shaping under the lock stalled the parser thread
+            /// for most of each frame with complex text.
+            impl<'a, 'b> WithPaneLines for LineRender<'a, 'b> {
+                fn with_lines_mut(&mut self, stable_top: StableRowIndex, lines: &mut [&mut Line]) {
+                    for (line_idx, line) in lines.iter().enumerate() {
+                        let stable_row = stable_top + line_idx as StableRowIndex;
+                        let quad_key = self.quad_key_for_line(stable_row, line_idx, line);
+                        let line = if self.cached_quad_is_usable(&quad_key) {
+                            None
+                        } else {
+                            Some((**line).clone())
+                        };
+                        self.prepared.push(PreparedLine {
+                            stable_row,
+                            line_idx,
+                            quad_key,
+                            line,
+                        });
+                    }
+                }
+            }
+
             pos.pane.with_lines_mut(stable_range.clone(), &mut render);
-            if let Some(error) = render.error.take() {
-                return Err(error).context("error while calling with_lines_mut");
+            for prepared in std::mem::take(&mut render.prepared) {
+                render.draw_prepared(prepared)?;
             }
         }
 

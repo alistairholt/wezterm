@@ -324,6 +324,21 @@ impl<K: Hash + Eq + Clone + Debug, V, S: Default + BuildHasher> LfuCache<K, V, S
         None
     }
 
+    /// Looks up an entry without counting it as a use: its frequency,
+    /// recency and the hit/miss metrics are left alone.
+    pub fn peek<Q: ?Sized + Debug>(&self, k: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        let bucket = self.bucket_for_key(&k);
+        self.buckets
+            .get(bucket)?
+            .iter()
+            .find(|entry| entry.key.borrow() == k)
+            .map(|entry| &entry.value)
+    }
+
     pub fn put(&mut self, k: K, v: V) {
         let bucket = self.bucket_for_key(&k);
 
@@ -923,6 +938,26 @@ mod test {
     /// Trimming keeps the most recently used entries even when older
     /// ones have higher counts, and leaves the cache consistent for
     /// later puts and evictions.
+    /// peek finds entries without making them more recent, so it doesn't
+    /// change which entries a trim keeps.
+    #[test]
+    fn peek_does_not_count_as_a_use() {
+        let mut cache = LfuCacheU64::with_capacity(8);
+        for i in 0..4 {
+            cache.put(i, i * 10);
+        }
+        for _ in 0..5 {
+            assert_eq!(cache.peek(&0), Some(&0));
+        }
+        assert!(cache.peek(&9).is_none());
+
+        // 0 is still the least recent entry, so it goes first
+        cache.trim_least_recent(3);
+        assert!(cache.peek(&0).is_none());
+        assert_eq!(cache.peek(&1), Some(&10));
+        assert_eq!(cache.len(), 3);
+    }
+
     #[test]
     fn trim_keeps_most_recent() {
         let mut cache = LfuCacheU64::with_capacity(8);
