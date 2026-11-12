@@ -22,6 +22,15 @@ usually the best available version.
 As features stabilize some brief notes about them will accumulate here.
 
 #### Changed
+* Plain ASCII output is written to the terminal a line segment at a time
+  instead of a character at a time. `cat` of a large file is about 1.7x
+  faster for plain text and about 2.3x faster for long wrapped lines, and
+  about 1.2x faster for colored output.
+* Lines that move into scrollback drop their spare capacity, so scrollback
+  uses about 25-35% less memory per line.
+* Fixed a crash when a notification (such as the font fallback warning) was
+  shown while `wezterm-gui` ran outside an app bundle, for example from
+  `cargo run`.
 * The tab bar runs `format-tab-title` again on every status update and
   whenever a pane's user var changes, not only when the status text
   changes. Tab titles built from the time (an animated spinner) or from
