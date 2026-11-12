@@ -1435,3 +1435,95 @@ fn test_hyperlinks() {
         Compare::TEXT | Compare::ATTRS,
     );
 }
+
+/// Printing runs of ASCII takes a fast path that writes a line segment at
+/// a time. Feed the same mixed input through the fast path and through the
+/// per-grapheme path and check the screens, scrollback and cursor match.
+#[test]
+fn ascii_fast_path_matches_general_path() {
+    use crate::terminalstate::performer::DISABLE_ASCII_FAST_PATH;
+
+    // Small deterministic generator so the test needs no extra crates
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+        fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str {
+            items[self.next() as usize % items.len()]
+        }
+    }
+
+    let pieces = [
+        "hello",
+        "world ",
+        "x",
+        " ",
+        "a longer run of plain ascii text ",
+        "e\u{301}",
+        "\u{301}",
+        "漢字",
+        "😀",
+        "👍🏽",
+        "\u{200b}",
+        "\r\n",
+        "\n",
+        "\r",
+        "\x1b[31m",
+        "\x1b[1;4m",
+        "\x1b[0m",
+        "\x1b[38;2;1;2;3m",
+        "\x1b[5G",
+        "\x1b[3;7H",
+        "\x1b[K",
+        "\x1b[2J",
+        "\x1b[?7l",
+        "\x1b[?7h",
+        "\x1b[4h",
+        "\x1b[4l",
+        "\x1b(0",
+        "\x1b(B",
+        "\x1b[?69h\x1b[3;15s",
+        "\x1b[?69l",
+        "\x1b]8;;http://example.com\x1b\\",
+        "\x1b]8;;\x1b\\",
+        "\t",
+        "\x08",
+    ];
+
+    for seed in 0..40 {
+        let mut rng = Lcg(seed);
+        let mut input = String::new();
+        for _ in 0..400 {
+            input.push_str(rng.pick(&pieces));
+        }
+
+        let run = |disable: bool| {
+            DISABLE_ASCII_FAST_PATH.with(|d| d.set(disable));
+            let mut term = TestTerm::new(6, 20, 50);
+            term.print(&input);
+            DISABLE_ASCII_FAST_PATH.with(|d| d.set(false));
+            let screen = term.screen();
+            let lines: Vec<_> = screen
+                .all_lines()
+                .iter()
+                .map(|line| {
+                    let cells: Vec<_> = line
+                        .visible_cells()
+                        .map(|c| (c.str().to_string(), c.width(), c.attrs().clone()))
+                        .collect();
+                    (cells, line.last_cell_was_wrapped())
+                })
+                .collect();
+            (lines, term.cursor_pos())
+        };
+
+        let fast = run(false);
+        let general = run(true);
+        assert!(fast == general, "seed {seed} differs for input {input:?}");
+    }
+}

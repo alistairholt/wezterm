@@ -157,6 +157,13 @@ impl ClusteredLine {
         }
     }
 
+    /// Drops spare capacity. Lines in scrollback are rarely changed again,
+    /// and `new` reserves 80 bytes of text for every line.
+    pub fn shrink_to_fit(&mut self) {
+        self.text.shrink_to_fit();
+        self.clusters.shrink_to_fit();
+    }
+
     pub fn len(&self) -> usize {
         self.len as usize
     }
@@ -221,6 +228,42 @@ impl ClusteredLine {
         }
         self.last_cell_width = NonZeroU8::new(cell_width as u8);
         self.len += cell_width as u32;
+    }
+
+    /// Appends `text`, which must be printable ASCII, as one cell per byte.
+    /// Same result as calling `append_grapheme` per byte, without the
+    /// per-cell attribute comparison.
+    pub fn append_ascii(&mut self, text: &str, attrs: &CellAttributes) {
+        debug_assert!(text.bytes().all(|b| (0x20..0x7f).contains(&b)));
+        if text.is_empty() {
+            return;
+        }
+        if text.len() > u16::MAX as usize {
+            for i in 0..text.len() {
+                self.append_grapheme(&text[i..i + 1], 1, attrs.clone());
+            }
+            return;
+        }
+        let run = text.len() as u16;
+        let extend = match self.clusters.last() {
+            Some(cluster) => {
+                cluster.attrs == *attrs && cluster.cell_width.checked_add(run).is_some()
+            }
+            None => false,
+        };
+        if extend {
+            if let Some(cluster) = self.clusters.last_mut() {
+                cluster.cell_width += run;
+            }
+        } else {
+            self.clusters.push(Cluster {
+                attrs: attrs.clone(),
+                cell_width: run,
+            });
+        }
+        self.text.push_str(text);
+        self.last_cell_width = NonZeroU8::new(1);
+        self.len += run as u32;
     }
 
     pub fn append(&mut self, cell: Cell) {
