@@ -3255,6 +3255,18 @@ impl WindowView {
         Class::get(VIEW_CLS_NAME).unwrap_or_else(Self::define_class)
     }
 
+    extern "C" fn accepts_preview_panel_control(_this: &mut Object, _sel: Sel, _panel: id) -> BOOL {
+        to_yes_no(super::quick_look::accepts_control())
+    }
+
+    extern "C" fn begin_preview_panel_control(_this: &mut Object, _sel: Sel, panel: id) {
+        super::quick_look::begin_control(panel);
+    }
+
+    extern "C" fn end_preview_panel_control(_this: &mut Object, _sel: Sel, panel: id) {
+        super::quick_look::end_control(panel);
+    }
+
     fn define_class() -> &'static Class {
         let mut cls = ClassDecl::new(VIEW_CLS_NAME, class!(NSView))
             .expect("Unable to register WindowView class");
@@ -3517,6 +3529,20 @@ impl WindowView {
             cls.add_method(
                 sel!(performDragOperation:),
                 Self::perform_drag_operation as extern "C" fn(&mut Object, Sel, id) -> BOOL,
+            );
+            // The view controls the Quick Look panel while it is open;
+            // see quick_look.rs.
+            cls.add_method(
+                sel!(acceptsPreviewPanelControl:),
+                Self::accepts_preview_panel_control as extern "C" fn(&mut Object, Sel, id) -> BOOL,
+            );
+            cls.add_method(
+                sel!(beginPreviewPanelControl:),
+                Self::begin_preview_panel_control as extern "C" fn(&mut Object, Sel, id),
+            );
+            cls.add_method(
+                sel!(endPreviewPanelControl:),
+                Self::end_preview_panel_control as extern "C" fn(&mut Object, Sel, id),
             );
         }
 

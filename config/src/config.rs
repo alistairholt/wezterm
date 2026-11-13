@@ -239,6 +239,15 @@ pub struct Config {
     #[dynamic(default = "default_true")]
     pub command_status_marks: bool,
 
+    /// Draw a thumbnail under each path in a pane's output that names
+    /// an image file, and open it in Quick Look when clicked.
+    #[dynamic(default = "default_true")]
+    pub inline_image_previews: bool,
+
+    /// The most rows a thumbnail drawn by `inline_image_previews` takes.
+    #[dynamic(default = "default_inline_image_preview_max_rows")]
+    pub inline_image_preview_max_rows: usize,
+
     /// If no `prog` is specified on the command line, use this
     /// instead of running the user's shell.
     /// For example, to have `wezterm` always run `top` by default,
@@ -1834,6 +1843,10 @@ const CLOSING_PARENTHESIS_HYPERLINK_PATTERN: &str =
     r"(\w+://[^\s()]*\(\S*\))(?:\s|$|[^_/a-zA-Z0-9-])";
 const GENERIC_HYPERLINK_PATTERN: &str = r"\w+://\S+[_/a-zA-Z0-9-]";
 const MAILTO_PATTERN: &str = r"\w+@[\w-]+(?:\.[\w-]+)*\.[\w-]*\w";
+
+fn default_inline_image_preview_max_rows() -> usize {
+    8
+}
 
 pub fn default_hyperlink_rules() -> Vec<hyperlink::Rule> {
     vec![

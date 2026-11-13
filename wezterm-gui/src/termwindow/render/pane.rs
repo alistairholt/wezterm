@@ -1,13 +1,14 @@
 use crate::quad::{QuadTrait, TripleLayerQuadAllocator};
 use crate::selection::SelectionRange;
 use crate::termwindow::box_model::*;
+use crate::termwindow::image_preview::PreviewLayout;
 use crate::termwindow::render::{
     same_hyperlink, CursorProperties, LineQuadCacheKey, LineQuadCacheValue, LineToEleShapeCacheKey,
     RenderScreenLineParams,
 };
 use crate::termwindow::{ScrollHit, UIItem, UIItemType};
 use ::window::bitmaps::TextureRect;
-use ::window::DeadKeyStatus;
+use ::window::{DeadKeyStatus, WindowOps};
 use anyhow::Context;
 use config::VisualBellTarget;
 use mux::pane::{PaneId, WithPaneLines};
@@ -31,6 +32,7 @@ impl crate::TermWindow {
         dims: &RenderableDimensions,
         palette: &ColorPalette,
         top_pixel_y: f32,
+        layout: &PreviewLayout,
     ) -> anyhow::Result<()> {
         let viewport_top = current_viewport.unwrap_or(dims.physical_top);
         let viewport_end = viewport_top + pos.height as StableRowIndex;
@@ -73,7 +75,11 @@ impl crate::TermWindow {
             if mark.row < viewport_top || mark.row >= viewport_end {
                 continue;
             }
-            let y = top_pixel_y + (pos.top as f32 + (mark.row - viewport_top) as f32) * cell_height;
+            let row = layout.visual_row((mark.row - viewport_top) as i64);
+            if row < 0 || row >= pos.height as i64 {
+                continue;
+            }
+            let y = top_pixel_y + (pos.top as f32 + row as f32) * cell_height;
             // ANSI green and red from the pane's color scheme.
             let color = palette.colors.0[if mark.status == 0 { 2 } else { 1 }];
             let rect = euclid::rect(x, y + cell_height * 0.15, width, cell_height * 0.7);
@@ -159,6 +165,9 @@ impl crate::TermWindow {
         let pane_id = pos.pane.pane_id();
         let current_viewport = self.get_viewport(pane_id);
         let dims = pos.pane.get_dimensions();
+        // Thumbnails of image files take rows of their own, which moves
+        // where the pane's rows are drawn.
+        let layout = self.image_preview_layout(pos, current_viewport, &dims);
 
         let gl_state = self.render_state.as_ref().unwrap();
 
@@ -300,7 +309,7 @@ impl crate::TermWindow {
         // and cells with their own background color sit on top of it.
         if let Some(color) = &config.cursor_guide_color {
             let viewport_top = current_viewport.unwrap_or(dims.physical_top);
-            let row = cursor.y - viewport_top;
+            let row = layout.visual_row((cursor.y - viewport_top) as i64);
             if pos.is_active
                 && cursor.visibility == termwiz::surface::CursorVisibility::Visible
                 && row >= 0
@@ -318,8 +327,16 @@ impl crate::TermWindow {
         }
 
         if config.command_status_marks {
-            self.paint_command_marks(pos, layers, current_viewport, &dims, &palette, top_pixel_y)
-                .context("paint_command_marks")?;
+            self.paint_command_marks(
+                pos,
+                layers,
+                current_viewport,
+                &dims,
+                &palette,
+                top_pixel_y,
+                &layout,
+            )
+            .context("paint_command_marks")?;
         }
 
         // FindCursor, like iTerm2's "Find Cursor": a crosshair through
@@ -328,7 +345,7 @@ impl crate::TermWindow {
         if pos.is_active {
             if let Some(intensity) = self.find_cursor_intensity(pane_id) {
                 let viewport_top = current_viewport.unwrap_or(dims.physical_top);
-                let row = cursor.y - viewport_top;
+                let row = layout.visual_row((cursor.y - viewport_top) as i64);
                 if row >= 0 && (row as usize) < pos.height && cursor.x < pos.width {
                     let color = palette.cursor_bg.to_linear().mul_alpha(0.6 * intensity);
                     let row_rect = euclid::rect(
@@ -466,6 +483,8 @@ impl crate::TermWindow {
                 filled_box: TextureRect,
                 window_is_transparent: bool,
                 layers: &'a mut TripleLayerQuadAllocator<'b>,
+                layout: &'a PreviewLayout,
+                lines_fingerprint: u64,
                 prepared: Vec<PreparedLine>,
             }
 
@@ -475,6 +494,7 @@ impl crate::TermWindow {
             struct PreparedLine {
                 stable_row: StableRowIndex,
                 line_idx: usize,
+                visual_row: i64,
                 quad_key: LineQuadCacheKey,
                 line: Option<Line>,
             }
@@ -506,10 +526,28 @@ impl crate::TermWindow {
                 filled_box,
                 window_is_transparent,
                 layers,
+                layout: &layout,
+                lines_fingerprint: layout.fingerprint,
                 prepared: Vec::with_capacity(dims.viewport_rows),
             };
 
             impl<'a, 'b> LineRender<'a, 'b> {
+                /// A row with a piece of the link under the mouse (see
+                /// link_under_mouse) is drawn from a copy that carries that
+                /// link, so the pieces highlight together.
+                fn joined_link_copy(
+                    &self,
+                    stable_row: StableRowIndex,
+                    line: &Line,
+                ) -> Option<Line> {
+                    let joined = self.term_window.joined_link.as_ref()?;
+                    let (cols, link) =
+                        joined.piece_for_row(&self.pos.pane, stable_row, line.current_seqno())?;
+                    let mut copy = line.clone();
+                    crate::termwindow::wrapped_link::set_link(&mut copy, cols, link);
+                    Some(copy)
+                }
+
                 /// Builds the quad cache key for a line. This runs with the
                 /// terminal locked, so it must stay cheap: the shape hash is
                 /// cached on the line and only recomputed when it changed.
@@ -517,6 +555,7 @@ impl crate::TermWindow {
                     &mut self,
                     stable_row: StableRowIndex,
                     line_idx: usize,
+                    visual_row: i64,
                     line: &Line,
                 ) -> LineQuadCacheKey {
                     let selrange = self
@@ -579,7 +618,7 @@ impl crate::TermWindow {
                         cursor,
                         shape_hash,
                         top_pixel_y: NotNan::new(self.top_pixel_y).unwrap()
-                            + (line_idx + self.pos.top) as f32
+                            + (visual_row as usize + self.pos.top) as f32
                                 * self.term_window.render_metrics.cell_size.height as f32,
                         left_pixel_x: NotNan::new(self.left_pixel_x).unwrap(),
                         phys_line_idx: line_idx,
@@ -729,6 +768,7 @@ impl crate::TermWindow {
                     let PreparedLine {
                         stable_row,
                         line_idx,
+                        visual_row,
                         quad_key,
                         line,
                     } = prepared;
@@ -746,8 +786,10 @@ impl crate::TermWindow {
                                 self.pos.pane.get_lines(stable_row..stable_row + 1);
                             match lines.pop() {
                                 Some(line) => {
-                                    let quad_key =
-                                        self.quad_key_for_line(stable_row, line_idx, &line);
+                                    let line =
+                                        self.joined_link_copy(stable_row, &line).unwrap_or(line);
+                                    let quad_key = self
+                                        .quad_key_for_line(stable_row, line_idx, visual_row, &line);
                                     self.render_uncached(stable_row, quad_key, &line)
                                 }
                                 None => Ok(()),
@@ -764,17 +806,29 @@ impl crate::TermWindow {
             /// for most of each frame with complex text.
             impl<'a, 'b> WithPaneLines for LineRender<'a, 'b> {
                 fn with_lines_mut(&mut self, stable_top: StableRowIndex, lines: &mut [&mut Line]) {
+                    self.lines_fingerprint =
+                        crate::termwindow::image_preview::lines_fingerprint(lines);
                     for (line_idx, line) in lines.iter().enumerate() {
                         let stable_row = stable_top + line_idx as StableRowIndex;
-                        let quad_key = self.quad_key_for_line(stable_row, line_idx, line);
+                        // Where the row is drawn. Thumbnails can move it
+                        // down, or up and out of view.
+                        let visual_row = self.layout.visual_row(line_idx as i64);
+                        if visual_row < 0 || visual_row >= self.pos.height as i64 {
+                            continue;
+                        }
+                        let joined = self.joined_link_copy(stable_row, line);
+                        let line: &Line = joined.as_ref().unwrap_or(&**line);
+                        let quad_key =
+                            self.quad_key_for_line(stable_row, line_idx, visual_row, line);
                         let line = if self.cached_quad_is_usable(&quad_key) {
                             None
                         } else {
-                            Some((**line).clone())
+                            Some(joined.clone().unwrap_or_else(|| line.clone()))
                         };
                         self.prepared.push(PreparedLine {
                             stable_row,
                             line_idx,
+                            visual_row,
                             quad_key,
                             line,
                         });
@@ -786,6 +840,20 @@ impl crate::TermWindow {
             for prepared in std::mem::take(&mut render.prepared) {
                 render.draw_prepared(prepared)?;
             }
+            // The lines just drawn aren't the ones the thumbnails were
+            // placed for (see lines_fingerprint): place them again.
+            let drawn_fingerprint = render.lines_fingerprint;
+            let lines_changed =
+                self.config.inline_image_previews && drawn_fingerprint != layout.fingerprint;
+            if lines_changed {
+                self.pane_state(pane_id).image_previews = None;
+                if let Some(window) = self.window.as_ref() {
+                    window.invalidate();
+                }
+            }
+
+            self.paint_image_previews(pos, layers, &layout, top_pixel_y, left_pixel_x)
+                .context("paint_image_previews")?;
         }
 
         /*

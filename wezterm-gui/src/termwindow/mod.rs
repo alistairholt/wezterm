@@ -75,6 +75,7 @@ pub mod box_model;
 pub mod charselect;
 pub mod clipboard;
 mod command_marks;
+mod image_preview;
 pub mod keyevent;
 pub mod metal_present;
 pub mod modal;
@@ -88,6 +89,7 @@ pub mod resize;
 mod selection;
 pub mod spawn;
 pub mod webgpu;
+mod wrapped_link;
 use crate::spawn::SpawnWhere;
 use prevcursor::PrevCursorPos;
 
@@ -169,6 +171,10 @@ pub enum UIItemType {
         pane_id: PaneId,
         row: StableRowIndex,
     },
+    /// The thumbnail of an image file named in a pane's output.
+    ImagePreview {
+        path: std::path::PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -222,6 +228,9 @@ pub struct PaneState {
     /// Set by FindCursor: when the crosshair over the cursor started.
     find_cursor_start: Option<Instant>,
     pub mouse_terminal_coords: Option<(ClickPosition, StableRowIndex)>,
+    /// Where the pane's rows were last drawn, with room made for
+    /// thumbnails of image files; see `image_preview`.
+    image_previews: Option<(image_preview::LayoutKey, Rc<image_preview::PreviewLayout>)>,
 }
 
 /// Data used when synchronously formatting pane and window titles
@@ -463,6 +472,11 @@ pub struct TermWindow {
 
     /// The URL over which we are currently hovering
     current_highlight: Option<Arc<Hyperlink>>,
+    /// The link put on the pieces of a path or URL that a program broke
+    /// over several rows, while the mouse is over it
+    joined_link: Option<mouseevent::JoinedLink>,
+    /// Thumbnails of the image files named in the panes' output
+    image_previews: image_preview::PreviewCache,
 
     quad_generation: usize,
     shape_generation: usize,
@@ -775,6 +789,8 @@ impl TermWindow {
             current_mouse_capture: None,
             last_mouse_click: None,
             current_highlight: None,
+            joined_link: None,
+            image_previews: Default::default(),
             quad_generation: 0,
             shape_generation: 0,
             shape_cache: RefCell::new(LfuCache::new(
