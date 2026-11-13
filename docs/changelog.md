@@ -164,6 +164,11 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* Paths to image files in a pane's output get a thumbnail drawn under
+  them, and the rows below move down to make room. Click a thumbnail to
+  open the image at full size in Quick Look. See
+  [inline_image_previews](config/lua/config/inline_image_previews.md) and
+  [inline_image_preview_max_rows](config/lua/config/inline_image_preview_max_rows.md).
 * [tab_style](config/lua/config/tab_style.md) picks the tab bar's look in
   one setting: `"Retro"`, `"Fancy"`, or the new `"Flat"` (thin dividers
   between tabs) and `"Capsule"` (the active tab as a rounded pill), without
@@ -403,6 +408,14 @@ As features stabilize some brief notes about them will accumulate here.
   `CTRL-u` to kill back to the start of the line. Thanks to @bew! #8013
 
 #### Fixed
+* A path or URL that a program broke over several rows with its own line
+  breaks (as Claude Code does with long paths) was linked one row at a
+  time: each piece highlighted by itself and opened a partial path. The
+  pieces now highlight together under the mouse and open as one link. This
+  applies when a [hyperlink rule](config/lua/config/hyperlink_rules.md)
+  matches the first piece, the next row starts no further right than the
+  link, and either the joined text is a file that exists or the first row
+  is filled to the right edge.
 * With a unix, SSH or TLS mux domain, the GUI's memory grew without limit
   while a pane printed a lot of output, once the window had been resized.
   The cache of lines received from the server lost its size limit on the

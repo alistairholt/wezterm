@@ -31,7 +31,7 @@ pub fn line_text_at(line: &Line, column: usize) -> Option<(String, usize)> {
 
 /// Characters that end a path token. Spaces in paths are not supported:
 /// terminal output gives no way to tell them from separators.
-fn is_separator(c: char) -> bool {
+pub(super) fn is_separator(c: char) -> bool {
     c.is_whitespace()
         || matches!(
             c,
