@@ -221,7 +221,15 @@ impl super::TermWindow {
             None
         };
 
-        if let Some(item) = ui_item.clone() {
+        // A thumbnail only takes clicks. Scrolling over one goes to the
+        // pane under it, as it does over the text around it.
+        let scroll_over_thumbnail = matches!(event.kind, WMEK::VertWheel(_) | WMEK::HorzWheel(_))
+            && matches!(
+                ui_item.as_ref().map(|item| &item.item_type),
+                Some(UIItemType::ImagePreview { .. })
+            );
+
+        if let Some(item) = ui_item.clone().filter(|_| !scroll_over_thumbnail) {
             if capture_mouse {
                 self.current_mouse_capture = Some(MouseCapture::UI);
             }
