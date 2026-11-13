@@ -40,6 +40,10 @@ As features stabilize some brief notes about them will accumulate here.
 * macOS: windows keep two Metal drawables instead of three. This saves one
   full-window texture per window, and still holds 120fps on ProMotion
   displays and during live resize.
+* The GUI no longer holds a pane's terminal lock while it shapes and draws
+  lines. It copies the lines that changed and draws them after releasing
+  the lock, so output keeps being parsed during a slow frame. `cat` of
+  CJK-heavy text is about 1.7-4.5x faster.
 * Fixed a crash when a notification (such as the font fallback warning) was
   shown while `wezterm-gui` ran outside an app bundle, for example from
   `cargo run`.
