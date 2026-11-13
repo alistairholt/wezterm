@@ -14,6 +14,7 @@ pub mod context_menu;
 pub mod dock;
 pub mod global_hotkey;
 pub mod menu;
+pub mod quick_look;
 pub mod save_panel;
 pub mod secure_input;
 pub mod sound;
