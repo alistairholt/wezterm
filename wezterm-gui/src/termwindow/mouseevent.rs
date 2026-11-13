@@ -1,6 +1,7 @@
 use crate::tabbar::TabBarItem;
 use crate::termwindow::{
-    GuiWin, MouseCapture, PositionedSplit, ScrollHit, TermWindowNotif, UIItem, UIItemType, TMB,
+    wrapped_link, GuiWin, MouseCapture, PositionedSplit, ScrollHit, TermWindowNotif, UIItem,
+    UIItemType, TMB,
 };
 use ::window::{
     CursorIcon, MouseButtons as WMB, MouseEvent, MouseEventKind as WMEK, MousePress,
@@ -12,13 +13,13 @@ use mux::pane::{Pane, PaneId, WithPaneLines};
 use mux::tab::SplitDirection;
 use mux::Mux;
 use mux_lua::MuxPane;
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::ops::Sub;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 use termwiz::hyperlink::Hyperlink;
-use termwiz::surface::Line;
+use termwiz::surface::{Line, SequenceNo};
 use wezterm_dynamic::ToDynamic;
 use wezterm_term::input::{MouseButton, MouseEventKind as TMEK};
 use wezterm_term::{ClickPosition, LastMouseClick, StableRowIndex};
@@ -44,6 +45,7 @@ impl super::TermWindow {
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
             | UIItemType::Split(_)
+            | UIItemType::ImagePreview { .. }
             | UIItemType::CommandMark { .. } => {}
         }
     }
@@ -56,6 +58,7 @@ impl super::TermWindow {
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
             | UIItemType::Split(_)
+            | UIItemType::ImagePreview { .. }
             | UIItemType::CommandMark { .. } => {}
         }
     }
@@ -387,7 +390,38 @@ impl super::TermWindow {
             UIItemType::CommandMark { pane_id, row } => {
                 self.mouse_event_command_mark(pane_id, row, event, context);
             }
+            UIItemType::ImagePreview { path } => {
+                self.mouse_event_image_preview(path, event, context);
+            }
         }
+    }
+
+    /// Clicking a thumbnail shows the image in Quick Look. The other
+    /// images on screen come along, so the arrow keys step through them.
+    fn mouse_event_image_preview(
+        &mut self,
+        path: std::path::PathBuf,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        context.set_cursor(Some(CursorIcon::Pointer));
+        if event.kind != WMEK::Press(MousePress::Left) {
+            return;
+        }
+        let mut paths: Vec<std::path::PathBuf> = vec![];
+        for item in &self.ui_items {
+            if let UIItemType::ImagePreview { path } = &item.item_type {
+                if !paths.contains(path) {
+                    paths.push(path.clone());
+                }
+            }
+        }
+        if let Some(idx) = paths.iter().position(|p| *p == path) {
+            paths.rotate_left(idx);
+        } else {
+            paths.insert(0, path);
+        }
+        crate::termwindow::image_preview::open_quick_look(paths);
     }
 
     /// Clicking a command status mark selects that command's output.
@@ -766,6 +800,17 @@ impl super::TermWindow {
             }
         }
 
+        // Thumbnails of image files take rows of their own, so the row
+        // under the mouse isn't the row drawn at that height.
+        let preview_layout = self
+            .pane_state(pane.pane_id())
+            .image_previews
+            .as_ref()
+            .map(|(_, layout)| Rc::clone(layout));
+        if let Some(layout) = preview_layout {
+            row = layout.row_at_visual(row);
+        }
+
         if capture_mouse {
             self.current_mouse_capture = Some(MouseCapture::TerminalPane(pane.pane_id()));
         }
@@ -827,33 +872,7 @@ impl super::TermWindow {
                 stable_row,
             ));
 
-        pane.apply_hyperlinks(stable_row..stable_row + 1, &self.config.hyperlink_rules);
-
-        struct FindCurrentLink {
-            current: Option<Arc<Hyperlink>>,
-            stable_row: StableRowIndex,
-            column: usize,
-        }
-
-        impl WithPaneLines for FindCurrentLink {
-            fn with_lines_mut(&mut self, stable_top: StableRowIndex, lines: &mut [&mut Line]) {
-                if stable_top == self.stable_row {
-                    if let Some(line) = lines.get(0) {
-                        if let Some(cell) = line.get_cell(self.column) {
-                            self.current = cell.attrs().hyperlink().cloned();
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut find_link = FindCurrentLink {
-            current: None,
-            stable_row,
-            column,
-        };
-        pane.with_lines_mut(stable_row..stable_row + 1, &mut find_link);
-        let new_highlight = find_link.current;
+        let new_highlight = self.link_under_mouse(&pane, stable_row, column, dims.cols);
 
         match (self.current_highlight.as_ref(), new_highlight) {
             (Some(old_link), Some(new_link)) if Arc::ptr_eq(&old_link, &new_link) => {
@@ -1091,5 +1110,136 @@ fn mouse_press_to_tmb(press: &MousePress) -> TMB {
         MousePress::Left => TMB::Left,
         MousePress::Right => TMB::Right,
         MousePress::Middle => TMB::Middle,
+    }
+}
+
+/// The link that covers a path or URL which a program broke over
+/// several rows; see `link_under_mouse`.
+pub(super) struct JoinedLink {
+    pane: Weak<dyn Pane>,
+    link: Arc<Hyperlink>,
+    /// The pieces: row, columns, and the row's seqno at the time
+    pieces: Vec<(StableRowIndex, std::ops::Range<usize>, SequenceNo)>,
+}
+
+impl JoinedLink {
+    /// Returns the columns of `stable_row` that are part of the link, and
+    /// the link, if the row belongs to `pane` and hasn't changed since.
+    pub(super) fn piece_for_row(
+        &self,
+        pane: &Arc<dyn Pane>,
+        stable_row: StableRowIndex,
+        seqno: SequenceNo,
+    ) -> Option<(std::ops::Range<usize>, &Arc<Hyperlink>)> {
+        let (_, cols, _) = self
+            .pieces
+            .iter()
+            .find(|(row, _, piece_seqno)| *row == stable_row && *piece_seqno == seqno)?;
+        let same_pane = self.pane.upgrade().map_or(false, |p| Arc::ptr_eq(&p, pane));
+        same_pane.then(|| (cols.clone(), &self.link))
+    }
+}
+
+/// Runs a closure over a range of a pane's lines
+struct WithLines<F: FnMut(StableRowIndex, &mut [&mut Line])>(F);
+
+impl<F: FnMut(StableRowIndex, &mut [&mut Line])> WithPaneLines for WithLines<F> {
+    fn with_lines_mut(&mut self, stable_top: StableRowIndex, lines: &mut [&mut Line]) {
+        (self.0)(stable_top, lines)
+    }
+}
+
+impl super::TermWindow {
+    /// Returns the hyperlink at a cell of the pane.
+    ///
+    /// A program that lays out its own text can break a long path or URL
+    /// over several rows with real newlines. The hyperlink rules then see
+    /// separate lines and link each piece by itself. When the mouse is
+    /// over such a piece, this returns one link for the whole text and
+    /// remembers where its pieces are. The renderer draws those cells as
+    /// that link, so they highlight together, and a click opens it.
+    ///
+    /// The pane's lines are not changed: a mux client's pane only hands
+    /// out copies of them.
+    fn link_under_mouse(
+        &mut self,
+        pane: &Arc<dyn Pane>,
+        stable_row: StableRowIndex,
+        column: usize,
+        cols: usize,
+    ) -> Option<Arc<Hyperlink>> {
+        let above = wrapped_link::MAX_ROWS as StableRowIndex;
+        let range = (stable_row - above).max(0)..stable_row + above + 1;
+        pane.apply_hyperlinks(range.clone(), &self.config.hyperlink_rules);
+
+        // Text is a file if it names one, looked up as OpenFileAtMouseCursor
+        // does. A `:line` or `:line:column` after the name is ignored.
+        let cwd = std::cell::OnceCell::new();
+        let home = dirs_next::home_dir();
+        let exists = |text: &str| {
+            let name = text
+                .trim_end_matches(|c: char| c.is_ascii_digit() || c == ':')
+                .to_string();
+            let cwd = cwd.get_or_init(|| {
+                pane.get_current_working_dir(mux::pane::CachePolicy::AllowStale)
+                    .and_then(|url| url.to_file_path().ok())
+            });
+            crate::termwindow::image_preview::resolve_path(&name, cwd.as_deref(), home.as_deref())
+                .map_or(false, |path| path.exists())
+        };
+
+        let mut current = None;
+        let mut found = None;
+        pane.with_lines_mut(
+            range,
+            &mut WithLines(|stable_top, lines: &mut [&mut Line]| {
+                let Ok(hovered) = usize::try_from(stable_row - stable_top) else {
+                    return;
+                };
+                current = lines
+                    .get(hovered)
+                    .and_then(|line| line.get_cell(column))
+                    .and_then(|cell| cell.attrs().hyperlink().cloned());
+                let Some(chain) = wrapped_link::find_chain(lines, hovered, column, cols, &exists)
+                else {
+                    return;
+                };
+                let pieces = chain
+                    .segments
+                    .into_iter()
+                    .map(|s| {
+                        (
+                            stable_top + s.row as StableRowIndex,
+                            s.cols,
+                            lines[s.row].current_seqno(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                found = Some((chain.uri, pieces));
+            }),
+        );
+
+        let Some((uri, pieces)) = found else {
+            self.joined_link = None;
+            return current;
+        };
+        // Keep the same link while nothing changes, so that moving the
+        // mouse along it doesn't count as a new highlight each time.
+        if let Some(joined) = self.joined_link.as_ref() {
+            let same_pane = joined
+                .pane
+                .upgrade()
+                .map_or(false, |p| Arc::ptr_eq(&p, pane));
+            if same_pane && joined.link.uri() == uri && joined.pieces == pieces {
+                return Some(Arc::clone(&joined.link));
+            }
+        }
+        let link = Arc::new(Hyperlink::new_implicit(uri));
+        self.joined_link = Some(JoinedLink {
+            pane: Arc::downgrade(pane),
+            link: Arc::clone(&link),
+            pieces,
+        });
+        Some(link)
     }
 }
